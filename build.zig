@@ -27,6 +27,9 @@ pub fn build(b: *std.build.Builder) void {
 
     exe.install();
 
+    const test_step = b.step("test", "Runs all tests");
+    test_step.dependOn(&b.addTest("lib/hackvr/lib.zig").step);
+
     const run_cmd = exe.run();
     run_cmd.step.dependOn(b.getInstallStep());
 

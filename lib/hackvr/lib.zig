@@ -1,6 +1,13 @@
 const std = @import("std");
 
-const real = f32;
+pub const parser = @import("parser.zig");
+
+comptime {
+    // include the parser module for tests
+    _ = parser;
+}
+
+pub const real = f32;
 
 pub const Vec3D = struct {
     x: real, y: real, z: real
