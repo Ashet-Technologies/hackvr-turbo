@@ -49,21 +49,91 @@ pub const Parser = struct {
             0 => return null,
             1 => {
                 if (std.mem.eql(u8, "help", items.buffer[0])) {
-                    return Event{
-                        .event_type = .help,
-                    };
+                    return Event{ .help = {} };
                 } else if (std.mem.eql(u8, "version", items.buffer[0])) {
-                    return Event{
-                        .event_type = .version,
-                    };
+                    return Event{ .version = {} };
                 } else {
                     return error.UnknownCommand;
                 }
             },
             else => {
-                return Event{
-                    .event_type = .not_implemented_yet,
+                const selector = Selector{
+                    .groups = items.buffer[0],
                 };
+                const cmd = items.buffer[1];
+                const args = items.span()[2..];
+
+                if (std.mem.eql(u8, cmd, "status")) {
+                    return Event{ .status = selector };
+                } else if (std.mem.eql(u8, cmd, "dump")) {
+                    return Event{ .dump = selector };
+                } else if (std.mem.eql(u8, cmd, "quit")) {
+                    return Event{ .quit = selector };
+                } else if (std.mem.eql(u8, cmd, "set")) {
+                    return Event{ .set = selector };
+                } else if (std.mem.eql(u8, cmd, "physics")) {
+                    return Event{ .physics = selector };
+                } else if (std.mem.eql(u8, cmd, "periodic")) {
+                    return Event{ .periodic = selector };
+                } else if (std.mem.eql(u8, cmd, "flatten")) {
+                    return Event{ .flatten = selector };
+                } else if (std.mem.eql(u8, cmd, "deleteallexcept")) {
+                    if (args.len != 1)
+                        return error.ArgumentMismatch;
+                    return Event{
+                        .delete_all_except = GroupArgSelector{
+                            .selector = selector,
+                            .groups = args[0],
+                        },
+                    };
+                } else if (std.mem.eql(u8, cmd, "deletegroup")) {
+                    if (args.len != 1)
+                        return error.ArgumentMismatch;
+                    return Event{
+                        .delete_group = GroupArgSelector{
+                            .selector = selector,
+                            .groups = args[0],
+                        },
+                    };
+                } else if (std.mem.eql(u8, cmd, "assimilate")) {
+                    if (args.len != 1)
+                        return error.ArgumentMismatch;
+                    return Event{
+                        .assimilate = GroupArgSelector{
+                            .selector = selector,
+                            .groups = args[0],
+                        },
+                    };
+                } else if (std.mem.eql(u8, cmd, "renamegroup")) {
+                    if (args.len != 1)
+                        return error.ArgumentMismatch;
+                    return Event{
+                        .rename_group = GroupArgSelector{
+                            .selector = selector,
+                            .groups = args[0],
+                        },
+                    };
+                } else if (std.mem.eql(u8, cmd, "export")) {
+                    if (args.len != 1)
+                        return error.ArgumentMismatch;
+                    return Event{
+                        .@"export" = GroupArgSelector{
+                            .selector = selector,
+                            .groups = args[0],
+                        },
+                    };
+                } else if (std.mem.eql(u8, cmd, "control")) {
+                    if (args.len != 1)
+                        return error.ArgumentMismatch;
+                    return Event{
+                        .control = GroupArgSelector{
+                            .selector = selector,
+                            .groups = args[0],
+                        },
+                    };
+                }
+
+                return error.UnknownCommand;
             },
         }
     }
@@ -156,15 +226,59 @@ pub const PushResult = union(enum) {
     },
 };
 
-pub const Event = struct {
-    const Type = enum {
-        help,
-        version,
+pub const EventType = enum {
+    help,
+    version,
+    status,
+    dump,
+    quit,
+    set,
+    physics,
+    control,
+    addshape,
+    @"export",
+    ping,
+    scale,
+    rotate,
+    periodic,
+    flatten,
+    move,
+    delete_group,
+    assimilate,
+    rename_group,
+    delete_all_except,
+};
 
-        not_implemented_yet,
-    };
+pub const Selector = struct {
+    groups: []const u8,
+};
 
-    event_type: Type,
+pub const GroupArgSelector = struct {
+    selector: Selector,
+    groups: []const u8,
+};
+
+pub const Event = union(EventType) {
+    delete_group: GroupArgSelector,
+    assimilate: GroupArgSelector,
+    rename_group: GroupArgSelector,
+    delete_all_except: GroupArgSelector,
+    help,
+    version,
+    status: Selector,
+    dump: Selector,
+    quit: Selector,
+    set: Selector,
+    physics: Selector,
+    control: GroupArgSelector,
+    addshape,
+    @"export": GroupArgSelector,
+    ping,
+    scale,
+    rotate,
+    periodic: Selector,
+    flatten: Selector,
+    move,
 };
 
 test "parser: invalid encoding" {
@@ -209,15 +323,109 @@ test "parser: ParseResult.rest/event" {
 }
 
 test "parser: parse line" {
-    _ = try Parser.parseLine("  a bb cccc ");
+    _ = Parser.parseLine("  a bb cccc ") catch |err| {
+        std.testing.expect(err == error.UnknownCommand);
+        return;
+    };
+    unreachable;
 }
 
 test "parser: cmd help" {
     const result = (try Parser.parseLine("help")) orelse return error.ExpectedEvent;
-    std.testing.expect(result.event_type == .help);
+    std.testing.expect(result == .help);
 }
 
 test "parser: cmd version" {
     const result = (try Parser.parseLine("version")) orelse return error.ExpectedEvent;
-    std.testing.expect(result.event_type == .version);
+    std.testing.expect(result == .version);
+}
+
+test "parser: cmd status" {
+    const result = (try Parser.parseLine("foobar status")) orelse return error.ExpectedEvent;
+    std.testing.expect(result == .status);
+    std.testing.expectEqualStrings("foobar", result.status.groups);
+}
+
+test "parser: cmd dump" {
+    const result = (try Parser.parseLine("foobar dump")) orelse return error.ExpectedEvent;
+    std.testing.expect(result == .dump);
+    std.testing.expectEqualStrings("foobar", result.dump.groups);
+}
+
+test "parser: cmd quit" {
+    const result = (try Parser.parseLine("foobar quit")) orelse return error.ExpectedEvent;
+    std.testing.expect(result == .quit);
+    std.testing.expectEqualStrings("foobar", result.quit.groups);
+}
+
+test "parser: cmd set" {
+    const result = (try Parser.parseLine("foobar set")) orelse return error.ExpectedEvent;
+    std.testing.expect(result == .set);
+    std.testing.expectEqualStrings("foobar", result.set.groups);
+}
+
+test "parser: cmd physics" {
+    const result = (try Parser.parseLine("foobar physics")) orelse return error.ExpectedEvent;
+    std.testing.expect(result == .physics);
+    std.testing.expectEqualStrings("foobar", result.physics.groups);
+}
+
+test "parser: cmd periodic" {
+    const result = (try Parser.parseLine("foobar periodic")) orelse return error.ExpectedEvent;
+    std.testing.expect(result == .periodic);
+    std.testing.expectEqualStrings("foobar", result.periodic.groups);
+}
+
+test "parser: cmd flatten" {
+    const result = (try Parser.parseLine("foobar flatten")) orelse return error.ExpectedEvent;
+    std.testing.expect(result == .flatten);
+    std.testing.expectEqualStrings("foobar", result.flatten.groups);
+}
+
+test "parser: cmd deleteallexcept" {
+    const result = (try Parser.parseLine("foobar deleteallexcept groupsel")) orelse return error.ExpectedEvent;
+
+    std.testing.expect(result == .delete_all_except);
+    std.testing.expectEqualStrings("foobar", result.delete_all_except.selector.groups);
+    std.testing.expectEqualStrings("groupsel", result.delete_all_except.groups);
+}
+
+test "parser: cmd delete_group" {
+    const result = (try Parser.parseLine("foobar deletegroup groupsel")) orelse return error.ExpectedEvent;
+
+    std.testing.expect(result == .delete_group);
+    std.testing.expectEqualStrings("foobar", result.delete_group.selector.groups);
+    std.testing.expectEqualStrings("groupsel", result.delete_group.groups);
+}
+
+test "parser: cmd delete_group" {
+    const result = (try Parser.parseLine("foobar renamegroup groupsel")) orelse return error.ExpectedEvent;
+
+    std.testing.expect(result == .rename_group);
+    std.testing.expectEqualStrings("foobar", result.rename_group.selector.groups);
+    std.testing.expectEqualStrings("groupsel", result.rename_group.groups);
+}
+
+test "parser: cmd delete_group" {
+    const result = (try Parser.parseLine("foobar assimilate groupsel")) orelse return error.ExpectedEvent;
+
+    std.testing.expect(result == .assimilate);
+    std.testing.expectEqualStrings("foobar", result.assimilate.selector.groups);
+    std.testing.expectEqualStrings("groupsel", result.assimilate.groups);
+}
+
+test "parser: cmd control" {
+    const result = (try Parser.parseLine("foobar control groupsel")) orelse return error.ExpectedEvent;
+
+    std.testing.expect(result == .control);
+    std.testing.expectEqualStrings("foobar", result.control.selector.groups);
+    std.testing.expectEqualStrings("groupsel", result.control.groups);
+}
+
+test "parser: cmd export" {
+    const result = (try Parser.parseLine("foobar export groupsel")) orelse return error.ExpectedEvent;
+
+    std.testing.expect(result == .@"export");
+    std.testing.expectEqualStrings("foobar", result.@"export".selector.groups);
+    std.testing.expectEqualStrings("groupsel", result.@"export".groups);
 }
