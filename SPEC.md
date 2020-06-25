@@ -34,22 +34,22 @@ Everything after a `#` in a line is considered a comment and will be ignored by 
 
 ### `[groupspec] renamegroup group`
 
-### `[groupspec] status
+### `[groupspec] status`
 **deprecated**
 
 Just outputs a variable that is supposed to be loops per second.`
 
-### `[groupspec] dump
+### `[groupspec] dump`
 Tries to let you output the various things that can be set.`
 
-### `[groupspec] quit
+### `[groupspec] quit`
 Closes hackvr only if the id that is doing it is the same as yours.`
 
 ### `[groupspec] set`
 
 ### `[groupspec] physics`
 
-### `[groupspec] control grou*
+### `[groupspec] control grou*`
 > Globbing this group could have fun effects
 
 ### `[groupspec] addshape color N x1 y1 z1 ... xN yN zN`
@@ -62,10 +62,10 @@ Closes hackvr only if the id that is doing it is the same as yours.`
 
 ### `[groupspec] rotate [+]x [+]y [+]z`
 
-### `[groupspec] periodic
-Flushes out locally-cached movement and rotation`
+### `[groupspec] periodic`
+Flushes out locally-cached movement and rotation
 
-### `[groupspec] flatten
+### `[groupspec] flatten`
 combines group attributes to the shapes.
 
 ### `[groupspec] move [+]x [+]y [+]z`
@@ -84,3 +84,8 @@ when a group is clicked on using the name set from the command line. usually `$U
 
 - Encoding is assumed UTF-8
 - Max. line length excluding the `\n` is 1024 bytes
+
+## TODO
+
+- Define coordinate system
+- Define relative coordinate system for "forward/backward/…"
