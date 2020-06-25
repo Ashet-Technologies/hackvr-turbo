@@ -15,6 +15,8 @@ pub const Parser = struct {
     line_buffer: [1024]u8,
     line_offset: usize,
 
+    point_buffer: [16]hvr.Vec3D,
+
     pub fn init() Parser {
         return Parser{
             .line_buffer = undefined,
@@ -249,6 +251,30 @@ pub const EventType = enum {
     delete_all_except,
 };
 
+pub const AbsRel = union(enum) {
+    absolute: hvr.real,
+    relative: hvr.real,
+
+    fn parse(str: []const u8) !AbsRel {
+        std.debug.assert(str.len > 0);
+        if (str[0] == '+') {
+            return AbsRel{
+                .relative = try std.fmt.parseFloat(hvr.real, str[1..]),
+            };
+        } else {
+            return AbsRel{
+                .absolute = try std.fmt.parseFloat(hvr.real, str[1..]),
+            };
+        }
+    }
+};
+
+pub const AbsRelVector = struct {
+    x: AbsRel,
+    y: AbsRel,
+    z: AbsRel,
+};
+
 pub const Selector = struct {
     groups: []const u8,
 };
@@ -256,6 +282,40 @@ pub const Selector = struct {
 pub const GroupArgSelector = struct {
     selector: Selector,
     groups: []const u8,
+};
+
+pub const AddShapeData = struct {
+    selector: Selector,
+    color: u8,
+    polygon: []const hvr.Vec3D,
+};
+
+pub const ScaleData = struct {
+    selector: Selector,
+    scale: hvr.Vec3D,
+};
+
+pub const AbsRelVectorData = struct {
+    selector: Selector,
+    vector: AbsRelVector,
+};
+
+pub const MoveData = struct {
+    selector: Selector,
+    direction: union(enum) {
+        forward,
+        backward,
+        left,
+        right,
+        up,
+        down,
+        offset: AbsRelVector,
+    },
+};
+
+pub const PingData = struct {
+    selector: Selector,
+    ping_target: []const u8,
 };
 
 pub const Event = union(EventType) {
@@ -271,14 +331,14 @@ pub const Event = union(EventType) {
     set: Selector,
     physics: Selector,
     control: GroupArgSelector,
-    addshape,
+    addshape: AddShapeData,
     @"export": GroupArgSelector,
-    ping,
-    scale,
-    rotate,
+    ping: PingData,
+    scale: ScaleData,
+    rotate: AbsRelVectorData,
     periodic: Selector,
     flatten: Selector,
-    move,
+    move: MoveData,
 };
 
 test "parser: invalid encoding" {
