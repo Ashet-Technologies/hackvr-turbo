@@ -3,6 +3,14 @@ const std = @import("std");
 const hackvr = std.build.Pkg{
     .name = "hackvr",
     .path = "lib/hackvr/lib.zig",
+    .dependencies = &[_]std.build.Pkg{
+        fixed_list,
+    },
+};
+
+const fixed_list = std.build.Pkg{
+    .name = "fixed-list",
+    .path = "lib/fixed_list.zig",
 };
 
 pub fn build(b: *std.build.Builder) void {
@@ -27,8 +35,11 @@ pub fn build(b: *std.build.Builder) void {
 
     exe.install();
 
+    const hackvr_tests = b.addTest("lib/hackvr/lib.zig");
+    hackvr_tests.addPackage(fixed_list);
+
     const test_step = b.step("test", "Runs all tests");
-    test_step.dependOn(&b.addTest("lib/hackvr/lib.zig").step);
+    test_step.dependOn(&hackvr_tests.step);
 
     const run_cmd = exe.run();
     run_cmd.step.dependOn(b.getInstallStep());
