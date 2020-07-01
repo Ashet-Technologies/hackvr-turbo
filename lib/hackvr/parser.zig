@@ -309,7 +309,8 @@ pub const PushResult = union(enum) {
         /// while encountering this event.
         /// Feed it into `push` again until .needs_data happens.
         rest: []const u8,
-        event: ?Event,
+
+        event: Event,
     },
 
     /// A format error happened while processing the data.
@@ -731,5 +732,27 @@ test "parser: cmd move" {
         std.testing.expect(result == .move);
         std.testing.expectEqualStrings("foobar", result.move.selector.groups);
         std.testing.expectEqual(MoveData.Type.down, result.move.direction);
+    }
+}
+
+test "parser: whole file" {
+    var parser = Parser.init();
+
+    var src: []const u8 = @embedFile("./data/test.hackvr");
+
+    while (src.len > 0) {
+        var item = try parser.push(src);
+        switch (item) {
+            // should never be reached as the test.hackvr is a complete file, terminated by a LF
+            .needs_data => unreachable,
+
+            // should never be reached as the test.hackvr file is correct
+            .parse_error => unreachable,
+
+            .event => |ev| {
+                src = ev.rest;
+                // std.log.debug(.HackVR, "event: {}\n", .{ev.event});
+            },
+        }
     }
 }

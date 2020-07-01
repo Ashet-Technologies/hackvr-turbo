@@ -66,7 +66,7 @@ Closes hackvr only if the id that is doing it is the same as yours.`
 Flushes out locally-cached movement and rotation
 
 ### `[groupspec] flatten`
-combines group attributes to the shapes.
+Applies the current group transform to all contained vertices in the selected groups and will reset set the group transforms to *none*.
 
 ### `[groupspec] move [+]x [+]y [+]z`
 
