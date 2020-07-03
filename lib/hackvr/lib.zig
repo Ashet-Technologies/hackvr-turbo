@@ -1,4 +1,5 @@
 const std = @import("std");
+const zlm = @import("zlm");
 
 pub const parsing = @import("parser.zig");
 
@@ -9,11 +10,7 @@ comptime {
 
 pub const real = f32;
 
-pub const Vec3D = struct {
-    x: real,
-    y: real,
-    z: real,
-};
+pub const Vec3D = zlm.Vec3;
 
 pub const Attribute = struct {
     color: u8, //color. not sure how I plan on using this.
@@ -36,10 +33,13 @@ pub const Group = struct {
     /// flat list of all shapes
     shapes: std.ArrayList(Shape3D),
 
+    transform: zlm.Mat4,
+
     pub fn init(allocator: *std.mem.Allocator, name: []const u8) Self {
         return Self{
             .name = name,
             .shapes = std.ArrayList(Shape3D).init(allocator),
+            .transform = zlm.Mat4.identity,
         };
     }
 
@@ -91,6 +91,44 @@ pub const State = struct {
         grp.* = Group.init(self.allocator, name_ptr);
         return grp;
     }
+
+    /// Returns an iterator yielding all groups.
+    pub fn iterator(self: *Self) GroupIterator {
+        return GroupIterator{
+            .state = self,
+            .index = 0,
+            .pattern = null,
+        };
+    }
+
+    /// Returns an iterator yielding all groups that match the pattern.
+    pub fn findGroups(self: *Self, pattern: []const u8) GroupIterator {
+        return GroupIterator{
+            .state = self,
+            .index = 0,
+            .pattern = pattern,
+        };
+    }
+
+    pub const GroupIterator = struct {
+        state: *Self,
+        index: usize,
+        pattern: ?[]const u8,
+
+        pub fn next(self: *@This()) ?*Group {
+            while (self.index < self.state.groups.items.len) {
+                const grp = &self.state.groups.items[self.index];
+                self.index += 1;
+
+                if (self.pattern) |pattern| {
+                    if (!wildcardEquals(pattern, grp.name))
+                        continue;
+                }
+                return grp;
+            }
+            return null;
+        }
+    };
 };
 
 pub fn applyEventToState(state: *State, event: parsing.Event) !void {
@@ -119,20 +157,77 @@ pub fn applyEventToState(state: *State, event: parsing.Event) !void {
                 .points = try std.mem.dupe(&state.arena.allocator, Vec3D, cmd.polygon),
             };
         },
+        .move => |cmd| {
+            // semantics unclear
+        },
+        .rotate => |cmd| {
+            // semantics unclear
+        },
         else => {
             std.debug.print("Event {} not implemented yet!\n", .{@as(parsing.EventType, event)});
         },
     }
 }
 
-test "state.getOrCreateGroup" {
+test "State.iterator" {
     var state = State.init(std.testing.allocator);
     defer state.deinit();
 
-    const grp1 = try state.getOrCreateGroup("grp");
-    const grp2 = try state.getOrCreateGroup("grp");
+    const grp1 = try state.getOrCreateGroup("grp1");
+    const grp2 = try state.getOrCreateGroup("grp2");
+    const grp3 = try state.getOrCreateGroup("grp3");
 
-    std.testing.expect(grp1 == grp2);
+    var found1 = false;
+    var found2 = false;
+    var found3 = false;
+
+    var iter = state.iterator();
+    while (iter.next()) |grp| {
+        if (grp == grp1) {
+            std.testing.expectEqual(false, found1);
+            found1 = true;
+        }
+        if (grp == grp2) {
+            std.testing.expectEqual(false, found2);
+            found2 = true;
+        }
+        if (grp == grp3) {
+            std.testing.expectEqual(false, found3);
+            found3 = true;
+        }
+    }
+
+    std.testing.expect(found1 and found2 and found3);
+}
+
+test "State.findGroups" {
+    var state = State.init(std.testing.allocator);
+    defer state.deinit();
+
+    const grp1 = try state.getOrCreateGroup("a_1");
+    const grp2 = try state.getOrCreateGroup("a_2");
+    const grp3 = try state.getOrCreateGroup("b_1");
+
+    var found1 = false;
+    var found2 = false;
+    var found3 = false;
+
+    var iter = state.findGroups("a*");
+    while (iter.next()) |grp| {
+        if (grp == grp1) {
+            std.testing.expectEqual(false, found1);
+            found1 = true;
+        }
+        if (grp == grp2) {
+            std.testing.expectEqual(false, found2);
+            found2 = true;
+        }
+        if (grp == grp3) {
+            std.testing.expect(false);
+        }
+    }
+
+    std.testing.expect(found1 and found2 and !found3);
 }
 
 test "applyEventToState (add_shape)" {

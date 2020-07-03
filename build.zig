@@ -5,12 +5,18 @@ const hackvr = std.build.Pkg{
     .path = "lib/hackvr/lib.zig",
     .dependencies = &[_]std.build.Pkg{
         fixed_list,
+        zlm,
     },
 };
 
 const fixed_list = std.build.Pkg{
     .name = "fixed-list",
     .path = "lib/fixed_list.zig",
+};
+
+const zlm = std.build.Pkg{
+    .name = "zlm",
+    .path = "lib/zlm/zlm.zig",
 };
 
 pub fn build(b: *std.build.Builder) void {
@@ -32,11 +38,13 @@ pub fn build(b: *std.build.Builder) void {
     exe.linkSystemLibrary("epoxy");
 
     exe.addPackage(hackvr);
+    exe.addPackage(zlm);
 
     exe.install();
 
     const hackvr_tests = b.addTest("lib/hackvr/lib.zig");
     hackvr_tests.addPackage(fixed_list);
+    hackvr_tests.addPackage(zlm);
 
     const test_step = b.step("test", "Runs all tests");
     test_step.dependOn(&hackvr_tests.step);

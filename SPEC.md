@@ -3,6 +3,35 @@
 **Note:**
 This specification is inofficial and based on the development of HackVR Turbo (which is based on the original hackvr)
 
+## Virtual Environment
+
+The HackVR virtual environment is structured in a tree of groups. Each group contains a set of polygons with 1 … n vertices. Each polygon may have it's own color, chosen from a palette. This environment is built and modified via commands on `stdin`. Interactions by the user with the environment are passed to `stdout`.
+
+### Groups
+Groups are unordered sets of polygons with a transformation in 3D space. Each vertex of the polygons is relative to the group origin. Transformations on the group (or any of its parents) will thus indirectly apply to the vertices.
+
+### Polygons (Shapes)
+Each polygon may have 1 (circle) up to n (n-gon) vertices. Each polygon is allowed to have any orientation in space, but is required to have all vertices to be on a plane. HackVR is allowed to enforce this and normalize all polygons to be on their mean plane.
+A polygon also has a velocity relative to its group and a color, chosen from a palette.
+
+### Colors (Palette)
+HackVR has a default palette with 16 different colors:
+
+| Color Index | Visual Description / Name | Default Value |
+|-------------|---------------------------|---------------|
+| 0           | Black                     | #111111       |
+| 1           | White                     | #EEEEEE       |
+
+### Coordinate System
+
+HackVR uses the right-handed OpenGL coordinate system. In a standard-oriented view, the camera has the following coordinates:
+
+| Direction | Vector     |
+|-----------|------------|
+| Right     | (1, 0, 0)  |
+| Upward    | (0, 1, 0)  |
+| Forward   | (0, 0, -1) |
+
 ## I/O
 HackVR communicates via `stdin`/`stdout`. Commands are passed on a line-by-line basis, each line is terminated by a LF character, optionally preceeded by a CR character.
 Each line must be encoded in valid UTF-8.
@@ -27,12 +56,17 @@ Everything after a `#` in a line is considered a comment and will be ignored by 
 ### `version`
 
 ### `[groupspec] deleteallexcept grou*`
+Deletes all groups not matching `grou*`.
 
 ### `[groupspec] deletegroup grou*`
+Deletes all groups matching `grou*`.
 
 ### `[groupspec] assimilate grou*`
 
 ### `[groupspec] renamegroup group`
+Renames and merges groups. Selects all groups with `groupspec` and renames them to `group`. When multiple groups are selected, those groups are merged into the master group.
+
+> TODO: Define how transforms will merge
 
 ### `[groupspec] status`
 **deprecated**
@@ -58,8 +92,7 @@ Closes hackvr only if the id that is doing it is the same as yours.`
 
 ### `[groupspec] ping any-string-without-spaces`
 
-### `[groupspec] scale x y z`
-
+d
 ### `[groupspec] rotate [+]x [+]y [+]z`
 
 ### `[groupspec] periodic`
@@ -84,8 +117,15 @@ when a group is clicked on using the name set from the command line. usually `$U
 
 - Encoding is assumed UTF-8
 - Max. line length excluding the `\n` is 1024 bytes
+- Polygons are required to be *flat*
 
 ## TODO
 
-- Define coordinate system
 - Define relative coordinate system for "forward/backward/…"
+- Full color table
+- Imlement `subsume` command
+
+### Questions
+- Shape velocity
+- Transformation order/execution
+- Colors
