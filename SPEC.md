@@ -49,6 +49,12 @@ Everything after a `#` in a line is considered a comment and will be ignored by 
 > groupnam* command arguments
 > ```
 
+A hint on notation:
+Everything in square brackets (`[]`) is a placeholder and will be replaced by the actual values in the protocol.
+Common placeholders are:
+- `[group]` The name of a group.
+- `[groupspec]` A group matching pattern. Either a name of a group or a prefix followed by `*`
+
 ## Input Commands
 
 ### `help`
@@ -61,7 +67,7 @@ Deletes all groups not matching `grou*`.
 ### `[groupspec] deletegroup grou*`
 Deletes all groups matching `grou*`.
 
-### `[groupspec] assimilate grou*`
+### `[groupspec] assimilate [groupspec]`
 
 ### `[groupspec] renamegroup group`
 Renames and merges groups. Selects all groups with `groupspec` and renames them to `group`. When multiple groups are selected, those groups are merged into the master group.
