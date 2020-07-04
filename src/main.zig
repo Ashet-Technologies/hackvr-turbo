@@ -135,6 +135,7 @@ pub fn main() anyerror!void {
     defer lines_vertex_buffer.delete();
 
     const PolygonGroup = struct {
+        group_index: usize,
         transform: zlm.Mat4,
         begin_tris: usize,
         count_tris: usize,
@@ -208,6 +209,11 @@ pub fn main() anyerror!void {
         return;
     };
 
+    const highlighted_loc = (try shader_program.uniformLocation("uHighlighting")) orelse {
+        std.log.crit(.Exe, "Failed to query uniform uHighlighting!\n", .{});
+        return;
+    };
+
     try gl.enable(.depth_test);
     try gl.depthFunc(.less_or_equal);
     try gl.enable(.polygon_offset_line);
@@ -220,6 +226,7 @@ pub fn main() anyerror!void {
     var parser = hackvr.parsing.Parser.init();
 
     const stdin = std.io.getStdIn().reader();
+    const stderr = std.io.getStdErr().writer();
     const stdout = std.io.getStdOut().writer();
 
     _ = try std.os.fcntl(
@@ -268,8 +275,13 @@ pub fn main() anyerror!void {
 
                         // should never be reached as the test.hackvr file is correct
                         .parse_error => |err| {
-                            try stdout.print("# Error while parsing line: {}\n", .{
+                            try stdout.print("# Error while parsing line: {}\n# '{}'\n", .{
                                 err.error_type,
+                                err.source,
+                            });
+                            try stderr.print("# Error while parsing line: {}\n# '{}'\n", .{
+                                err.error_type,
+                                err.source,
                             });
                             slice = err.rest;
                         },
@@ -284,12 +296,19 @@ pub fn main() anyerror!void {
             }
         }
 
+        var signal_picked_shape = false;
+
         // process SDL events
         {
             var event: c.SDL_Event = undefined;
             while (c.SDL_PollEvent(&event) != 0) {
                 switch (event.type) {
                     c.SDL_QUIT => break :mainLoop,
+                    c.SDL_MOUSEBUTTONDOWN => {
+                        if (event.button.button == c.SDL_BUTTON_LEFT) {
+                            signal_picked_shape = true;
+                        }
+                    },
                     c.SDL_MOUSEMOTION => {
                         const motion = &event.motion;
 
@@ -375,9 +394,11 @@ pub fn main() anyerror!void {
             vertex_list.shrink(0);
             poly_groups.shrink(0);
 
+            var group_index: usize = 0;
             var groups = state.iterator();
-            while (groups.next()) |group| {
+            while (groups.next()) |group| : (group_index += 1) {
                 var poly_grp = PolygonGroup{
+                    .group_index = group_index,
                     .begin_tris = vertex_list.items.len,
                     .count_tris = undefined,
                     .begin_lines = outline_list.items.len,
@@ -439,9 +460,6 @@ pub fn main() anyerror!void {
 
                 try poly_groups.append(poly_grp);
             }
-
-            try gl.namedBufferData(tris_vertex_buffer, Vertex, vertex_list.items, .dynamic_draw);
-            try gl.namedBufferData(lines_vertex_buffer, Vertex, outline_list.items, .dynamic_draw);
         }
 
         const mat_proj = zlm.Mat4.createPerspective(1.0, 16.0 / 9.0, 0.1, 10000.0);
@@ -457,6 +475,117 @@ pub fn main() anyerror!void {
 
         const mat_view_proj = mat_view.mul(mat_proj);
 
+        const mat_view_proj_inv = invertMatrix(mat_view_proj) orelse unreachable;
+
+        // std.debug.warn("normal: {}\n", .{mat_view_proj});
+        // std.debug.warn("invert: {}\n", .{mat_view_proj_inv});
+
+        const PickedShape = struct {
+            group_index: usize,
+            shape_index: usize,
+            group: *hackvr.Group,
+            shape: *hackvr.Shape3D,
+        };
+
+        var picked_shape: ?PickedShape = blk: {
+            var mouse_x: c_int = undefined;
+            var mouse_y: c_int = undefined;
+            _ = c.SDL_GetMouseState(&mouse_x, &mouse_y);
+
+            var mouse_pos_near_ss = zlm.Vec4{
+                .x = 2.0 * @intToFloat(f32, mouse_x) / 1279.0 - 1.0,
+                .y = 1.0 - 2.0 * @intToFloat(f32, mouse_y) / 719.0,
+                .z = 0.0,
+                .w = 1.0,
+            };
+            var mouse_pos_far_ss = zlm.Vec4{
+                .x = mouse_pos_near_ss.x,
+                .y = mouse_pos_near_ss.y,
+                .z = 1.0,
+                .w = 1.0,
+            };
+
+            // std.debug.print("ss {} {}\n", .{ mouse_pos_near_ss, mouse_pos_far_ss });
+
+            var mouse_pos_near_ws = mouse_pos_near_ss.transform(mat_view_proj_inv);
+            mouse_pos_near_ws = mouse_pos_near_ws.scale(1.0 / mouse_pos_near_ws.w);
+
+            var mouse_pos_far_ws = mouse_pos_far_ss.transform(mat_view_proj_inv);
+            mouse_pos_far_ws = mouse_pos_far_ws.scale(1.0 / mouse_pos_far_ws.w);
+
+            // std.debug.print("ws {} {}\n", .{ mouse_pos_near_ws, mouse_pos_far_ws });
+
+            var ray_origin = mouse_pos_near_ws.swizzle("xyz");
+
+            var ray_direction = mouse_pos_far_ws.swizzle("xyz").sub(ray_origin).normalize();
+
+            try outline_list.append(Vertex{
+                .position = ray_origin,
+                .color = parseColor("#FF00FF"),
+            });
+            try outline_list.append(Vertex{
+                .position = ray_origin.add(ray_direction.scale(100)),
+                .color = parseColor("#FF00FF"),
+            });
+
+            var distance = std.math.inf(f32);
+
+            var result: ?PickedShape = null;
+
+            var group_index: usize = 0;
+            var groups = state.iterator();
+            while (groups.next()) |group| : (group_index += 1) {
+                const transform = zlm.Mat4.mul(
+                    zlm.Mat4.createAngleAxis(zlm.Vec3.unitY, zlm.toRadians(group.rotation.y)),
+                    zlm.Mat4.createTranslation(group.translation),
+                );
+
+                for (group.shapes.items) |*shape, shape_index| {
+                    if (shape.points.len < 3) {
+                        std.debug.print("count: {}\n", .{shape.points.len});
+                    } else {
+                        // Simple fan-out triangulation.
+                        // Not beautiful, but very simple
+                        var i: usize = 2;
+                        while (i < shape.points.len) {
+                            if (rayTriangleIntersect(
+                                ray_origin,
+                                ray_direction,
+                                shape.points[0].transformPosition(transform),
+                                shape.points[i - 1].transformPosition(transform),
+                                shape.points[i].transformPosition(transform),
+                            )) |dist| {
+                                if (dist < distance) {
+                                    distance = dist;
+                                    result = PickedShape{
+                                        .group_index = group_index,
+                                        .shape_index = shape_index,
+                                        .shape = shape,
+                                        .group = group,
+                                    };
+                                }
+                            }
+
+                            i += 1;
+                        }
+                    }
+                }
+            }
+            break :blk result;
+        };
+
+        if (signal_picked_shape) {
+            if (picked_shape) |indices| {
+                try stdout.print("{} action {}\n", .{
+                    "USER",
+                    indices.group.name,
+                });
+            }
+        }
+
+        try gl.namedBufferData(tris_vertex_buffer, Vertex, vertex_list.items, .dynamic_draw);
+        try gl.namedBufferData(lines_vertex_buffer, Vertex, outline_list.items, .dynamic_draw);
+
         // render graphics
         {
             try gl.clearColor(0.0, 0.0, 0.3, 1.0);
@@ -468,6 +597,12 @@ pub fn main() anyerror!void {
 
             try vao.bind();
             try shader_program.use();
+
+            try gl.programUniform1f(
+                shader_program,
+                highlighted_loc,
+                0.0,
+            );
 
             try vao.vertexBuffer(0, tris_vertex_buffer, 0, @sizeOf(Vertex));
             for (poly_groups.items) |poly_grp| {
@@ -487,6 +622,17 @@ pub fn main() anyerror!void {
             for (poly_groups.items) |poly_grp| {
                 const transform = zlm.Mat4.mul(poly_grp.transform, mat_view_proj);
 
+                const picked = if (picked_shape) |indices|
+                    indices.group_index == poly_grp.group_index
+                else
+                    false;
+
+                try gl.programUniform1f(
+                    shader_program,
+                    highlighted_loc,
+                    if (picked) @as(f32, 1.0) else @as(f32, 0.0),
+                );
+
                 try gl.programUniformMatrix4(
                     shader_program,
                     transform_loc,
@@ -495,6 +641,15 @@ pub fn main() anyerror!void {
                 );
                 try gl.drawArrays(.lines, poly_grp.begin_lines, poly_grp.count_lines);
             }
+
+            var transform = mat_view_proj;
+            try gl.programUniformMatrix4(
+                shader_program,
+                transform_loc,
+                false,
+                @ptrCast([*]const [4][4]f32, &transform.fields)[0..1],
+            );
+            try gl.drawArrays(.lines, outline_list.items.len - 2, 2);
 
             c.SDL_GL_SwapWindow(window);
             c.SDL_Delay(10);
@@ -544,4 +699,196 @@ fn isDataOnStdInAvailable() !bool {
         return true;
     }
     return false;
+}
+
+fn rayTriangleIntersect(orig: zlm.Vec3, dir: zlm.Vec3, v0: zlm.Vec3, v1: zlm.Vec3, v2: zlm.Vec3) ?f32 {
+    const kEpsilon = 0.0001;
+
+    // compute plane's normal
+    const v0v1 = v1.sub(v0);
+    const v0v2 = v2.sub(v0);
+    // no need to normalize
+    const N = v0v1.cross(v0v2); // N
+    const area2 = N.length();
+
+    // Step 1: finding P
+
+    // check if ray and plane are parallel ?
+    const NdotRayDirection = N.dot(dir);
+    if (std.math.absFloat(NdotRayDirection) < kEpsilon) { // almost 0
+        return null; // they are parallel so they don't intersect !
+    }
+
+    // compute d parameter using equation 2
+    const d = N.dot(v0);
+
+    // compute t (equation 3)
+    const t = (N.dot(orig) + d) / NdotRayDirection;
+    // check if the triangle is in behind the ray
+    if (t < 0) {
+        return null; // the triangle is behind
+    }
+
+    // compute the intersection point using equation 1
+    const P = orig.add(dir.scale(t));
+
+    // Step 2: inside-outside test
+
+    // edge 0
+    const edge0 = v1.sub(v0);
+    const vp0 = P.sub(v0);
+    const C0 = edge0.cross(vp0); // vector perpendicular to triangle's plane
+    if (N.dot(C0) < 0) {
+        return null; // P is on the right side
+    }
+
+    // edge 1
+    const edge1 = v2.sub(v1);
+    const vp1 = P.sub(v1);
+    const C1 = edge1.cross(vp1);
+    if (N.dot(C1) < 0) {
+        return null; // P is on the right side
+    }
+
+    // edge 2
+    const edge2 = v0.sub(v2);
+    const vp2 = P.sub(v2);
+    const C2 = edge2.cross(vp2);
+    if (N.dot(C2) < 0) {
+        return null; // P is on the right side;
+    }
+
+    return t; // this ray hits the triangle
+}
+
+fn invertMatrix(mat: zlm.Mat4) ?zlm.Mat4 {
+    const m = @bitCast([16]f32, mat.fields);
+    var inv: [16]f32 = undefined;
+
+    inv[0] = m[5] * m[10] * m[15] -
+        m[5] * m[11] * m[14] -
+        m[9] * m[6] * m[15] +
+        m[9] * m[7] * m[14] +
+        m[13] * m[6] * m[11] -
+        m[13] * m[7] * m[10];
+
+    inv[4] = -m[4] * m[10] * m[15] +
+        m[4] * m[11] * m[14] +
+        m[8] * m[6] * m[15] -
+        m[8] * m[7] * m[14] -
+        m[12] * m[6] * m[11] +
+        m[12] * m[7] * m[10];
+
+    inv[8] = m[4] * m[9] * m[15] -
+        m[4] * m[11] * m[13] -
+        m[8] * m[5] * m[15] +
+        m[8] * m[7] * m[13] +
+        m[12] * m[5] * m[11] -
+        m[12] * m[7] * m[9];
+
+    inv[12] = -m[4] * m[9] * m[14] +
+        m[4] * m[10] * m[13] +
+        m[8] * m[5] * m[14] -
+        m[8] * m[6] * m[13] -
+        m[12] * m[5] * m[10] +
+        m[12] * m[6] * m[9];
+
+    inv[1] = -m[1] * m[10] * m[15] +
+        m[1] * m[11] * m[14] +
+        m[9] * m[2] * m[15] -
+        m[9] * m[3] * m[14] -
+        m[13] * m[2] * m[11] +
+        m[13] * m[3] * m[10];
+
+    inv[5] = m[0] * m[10] * m[15] -
+        m[0] * m[11] * m[14] -
+        m[8] * m[2] * m[15] +
+        m[8] * m[3] * m[14] +
+        m[12] * m[2] * m[11] -
+        m[12] * m[3] * m[10];
+
+    inv[9] = -m[0] * m[9] * m[15] +
+        m[0] * m[11] * m[13] +
+        m[8] * m[1] * m[15] -
+        m[8] * m[3] * m[13] -
+        m[12] * m[1] * m[11] +
+        m[12] * m[3] * m[9];
+
+    inv[13] = m[0] * m[9] * m[14] -
+        m[0] * m[10] * m[13] -
+        m[8] * m[1] * m[14] +
+        m[8] * m[2] * m[13] +
+        m[12] * m[1] * m[10] -
+        m[12] * m[2] * m[9];
+
+    inv[2] = m[1] * m[6] * m[15] -
+        m[1] * m[7] * m[14] -
+        m[5] * m[2] * m[15] +
+        m[5] * m[3] * m[14] +
+        m[13] * m[2] * m[7] -
+        m[13] * m[3] * m[6];
+
+    inv[6] = -m[0] * m[6] * m[15] +
+        m[0] * m[7] * m[14] +
+        m[4] * m[2] * m[15] -
+        m[4] * m[3] * m[14] -
+        m[12] * m[2] * m[7] +
+        m[12] * m[3] * m[6];
+
+    inv[10] = m[0] * m[5] * m[15] -
+        m[0] * m[7] * m[13] -
+        m[4] * m[1] * m[15] +
+        m[4] * m[3] * m[13] +
+        m[12] * m[1] * m[7] -
+        m[12] * m[3] * m[5];
+
+    inv[14] = -m[0] * m[5] * m[14] +
+        m[0] * m[6] * m[13] +
+        m[4] * m[1] * m[14] -
+        m[4] * m[2] * m[13] -
+        m[12] * m[1] * m[6] +
+        m[12] * m[2] * m[5];
+
+    inv[3] = -m[1] * m[6] * m[11] +
+        m[1] * m[7] * m[10] +
+        m[5] * m[2] * m[11] -
+        m[5] * m[3] * m[10] -
+        m[9] * m[2] * m[7] +
+        m[9] * m[3] * m[6];
+
+    inv[7] = m[0] * m[6] * m[11] -
+        m[0] * m[7] * m[10] -
+        m[4] * m[2] * m[11] +
+        m[4] * m[3] * m[10] +
+        m[8] * m[2] * m[7] -
+        m[8] * m[3] * m[6];
+
+    inv[11] = -m[0] * m[5] * m[11] +
+        m[0] * m[7] * m[9] +
+        m[4] * m[1] * m[11] -
+        m[4] * m[3] * m[9] -
+        m[8] * m[1] * m[7] +
+        m[8] * m[3] * m[5];
+
+    inv[15] = m[0] * m[5] * m[10] -
+        m[0] * m[6] * m[9] -
+        m[4] * m[1] * m[10] +
+        m[4] * m[2] * m[9] +
+        m[8] * m[1] * m[6] -
+        m[8] * m[2] * m[5];
+
+    const det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
+
+    if (det == 0)
+        return null;
+
+    const inv_det = 1.0 / det;
+
+    for (inv) |*val| {
+        val.* *= inv_det;
+    }
+
+    return zlm.Mat4{
+        .fields = @bitCast([4][4]f32, inv),
+    };
 }

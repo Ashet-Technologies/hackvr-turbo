@@ -266,8 +266,16 @@ pub const Parser = struct {
                     const event = self.parseLine(line) catch |err| switch (err) {
                         error.UnknownCommand => return PushResult{
                             .parse_error = .{
+                                .source = line,
                                 .rest = rest,
                                 .error_type = .unknown_command,
+                            },
+                        },
+                        error.ArgumentMismatch => return PushResult{
+                            .parse_error = .{
+                                .source = line,
+                                .rest = rest,
+                                .error_type = .argument_mismatch,
                             },
                         },
                         else => return err,
@@ -319,7 +327,11 @@ pub const PushResult = union(enum) {
             syntax_error,
             invalid_format,
             unknown_command,
+            argument_mismatch,
         };
+
+        /// The portion that triggered the error.
+        source: []const u8,
 
         /// The portion of the input data that was not parsed
         /// while encountering this event.

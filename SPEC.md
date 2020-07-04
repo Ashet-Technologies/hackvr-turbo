@@ -107,7 +107,7 @@ Applies the current group transform to all contained vertices in the selected gr
 
 ## Output Commands
 
-### `name action targetgroup`
+### `[name] action [targetgroup]`
 
 when a group is clicked on using the name set from the command line. usually `$USER`
 
