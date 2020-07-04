@@ -583,7 +583,7 @@ test "parser: cmd delete_group" {
 }
 
 test "parser: cmd delete_group" {
-    const result = (try Parser.init().parseLine("foobar renamegroup groupsel")) orelse return error.ExpectedEvent;
+    const result = (try Parser.init().parseLine("foobar renamegroup foobar groupsel")) orelse return error.ExpectedEvent;
 
     std.testing.expect(result == .rename_group);
     std.testing.expectEqualStrings("foobar", result.rename_group.selector.groups);
