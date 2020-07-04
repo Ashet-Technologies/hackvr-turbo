@@ -2,6 +2,9 @@
 
 Implementation of [epochs HackVR](https://github.com/kkabrams/hackvr) project.
 
+[![](https://mq32.de/public/1e394016e7c7292bb661299a912266a0d1a79182.png
+)](https://mq32.de/public/hackvr-05.mp4)
+
 ## Current status
 
 - Basic rendering works
