@@ -25,7 +25,7 @@ const CliOptions = struct {
 };
 
 const cli_options = CliOptions{
-    .multisampling = null,
+    .multisampling = 8,
 };
 
 fn parseColor(comptime col: []const u8) zlm.Vec3 {
@@ -80,8 +80,8 @@ pub fn main() anyerror!void {
     try sdlCheck(c.SDL_GL_SetAttribute(.SDL_GL_CONTEXT_FLAGS, c.SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG | c.SDL_GL_CONTEXT_DEBUG_FLAG));
 
     if (cli_options.multisampling) |samples| {
-        try sdlCheck(c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLEBUFFERS, 1));
-        try sdlCheck(c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLESAMPLES, samples));
+        try sdlCheck(c.SDL_GL_SetAttribute(.SDL_GL_MULTISAMPLEBUFFERS, 1));
+        try sdlCheck(c.SDL_GL_SetAttribute(.SDL_GL_MULTISAMPLESAMPLES, samples));
     }
 
     var window = c.SDL_CreateWindow(
@@ -103,28 +103,6 @@ pub fn main() anyerror!void {
 
     var state = hackvr.State.init(std.testing.allocator);
     defer state.deinit();
-
-    var parser = hackvr.parsing.Parser.init();
-
-    // Good enough for now, should be changed later!
-    {
-        var src: []const u8 = @embedFile("../lib/hackvr/data/test.hackvr");
-        while (src.len > 0) {
-            var item = try parser.push(src);
-            switch (item) {
-                // should never be reached as the test.hackvr is a complete file, terminated by a LF
-                .needs_data => unreachable,
-
-                // should never be reached as the test.hackvr file is correct
-                .parse_error => unreachable,
-
-                .event => |ev| {
-                    src = ev.rest;
-                    try hackvr.applyEventToState(&state, ev.event);
-                },
-            }
-        }
-    }
 
     var vao = try gl.createVertexArray();
     defer vao.delete();
@@ -232,21 +210,77 @@ pub fn main() anyerror!void {
 
     try gl.enable(.depth_test);
     try gl.depthFunc(.less_or_equal);
+    try gl.enable(.polygon_offset_line);
+    try gl.polygonOffset(0.0, -16.0);
 
     var time: f32 = 0.0;
 
     var hackvr_dirty = true;
 
+    var parser = hackvr.parsing.Parser.init();
+
+    const stdin = std.io.getStdIn().reader();
+    const stdout = std.io.getStdOut().writer();
+
+    _ = try std.os.fcntl(
+        std.io.getStdIn().handle,
+        std.os.F_SETFL,
+        std.os.O_NONBLOCK | try std.os.fcntl(std.io.getStdIn().handle, std.os.F_GETFL, 0),
+    );
+
     mainLoop: while (true) {
         time += 1.0 / 60.0;
 
-        // process events
+        // process HackVR events
+        if (try isDataOnStdInAvailable()) {
+            var buffer: [256]u8 = undefined;
+
+            while (true) {
+                const len = stdin.read(&buffer) catch |err| switch (err) {
+                    error.WouldBlock => break,
+                    else => |e| return e,
+                };
+                if (len == 0) // EOF
+                    break;
+
+                var slice: []const u8 = buffer[0..len];
+
+                while (slice.len > 0) {
+                    var item = try parser.push(slice);
+                    switch (item) {
+                        // should never be reached as the test.hackvr is a complete file, terminated by a LF
+                        .needs_data => {
+                            // just happily accept that the data wasn't enough
+                            break;
+                        },
+
+                        // should never be reached as the test.hackvr file is correct
+                        .parse_error => |err| {
+                            try stdout.print("# Error while parsing line: {}\n", .{
+                                err.error_type,
+                            });
+                            slice = err.rest;
+                        },
+
+                        .event => |ev| {
+                            slice = ev.rest;
+                            try hackvr.applyEventToState(&state, ev.event);
+                            hackvr_dirty = true;
+                        },
+                    }
+                }
+            }
+        }
+
+        // process SDL events
         {
             var event: c.SDL_Event = undefined;
             while (c.SDL_PollEvent(&event) != 0) {
                 switch (event.type) {
                     c.SDL_QUIT => break :mainLoop,
-                    else => std.log.notice(.HackVR, "Unhandled event: {}\n", .{event.type}),
+                    else => {
+                        // std.log.notice(.HackVR, "Unhandled event: {}\n", .{event.type});
+                    },
                 }
             }
         }
@@ -299,21 +333,21 @@ pub fn main() anyerror!void {
                         while (i < shape.points.len) {
                             try outline_list.append(Vertex{
                                 .position = shape.points[i - 1],
-                                .color = palette[15],
+                                .color = zlm.Vec3.one,
                             });
                             try outline_list.append(Vertex{
                                 .position = shape.points[i],
-                                .color = palette[15],
+                                .color = zlm.Vec3.one,
                             });
                             i += 1;
                         }
                         try outline_list.append(Vertex{
                             .position = shape.points[0],
-                            .color = palette[15],
+                            .color = zlm.Vec3.one,
                         });
                         try outline_list.append(Vertex{
                             .position = shape.points[shape.points.len - 1],
-                            .color = palette[15],
+                            .color = zlm.Vec3.one,
                         });
                     }
                 }
@@ -334,7 +368,7 @@ pub fn main() anyerror!void {
             zlm.Vec3.unitY,
         );
 
-        const mat_view_proj = zlm.Mat4.createAngleAxis(zlm.Vec3.unitY, time).mul(mat_view.mul(mat_proj));
+        const mat_view_proj = zlm.Mat4.createAngleAxis(zlm.Vec3.unitY, 0.3 * time).mul(mat_view.mul(mat_proj));
 
         // render graphics
         {
@@ -398,4 +432,29 @@ fn openGlDebugCallback(
         .notification => std.log.notice(.OpenGL, msg_fmt, msg_arg),
         else => std.log.crit(.OpenGL, msg_fmt, msg_arg),
     }
+}
+
+fn isDataOnStdInAvailable() !bool {
+    const stdin = std.io.getStdIn();
+    if (std.builtin.os.tag == .linux) {
+        var fds = [1]std.os.pollfd{
+            .{
+                .fd = stdin.handle,
+                .events = std.os.POLLIN,
+                .revents = 0,
+            },
+        };
+        _ = try std.os.poll(&fds, 0);
+        if ((fds[0].revents & std.os.POLLIN) != 0) {
+            return true;
+        }
+    }
+    if (std.builtin.os.tag == .windows) {
+        std.os.windows.WaitForSingleObject(stdin.handle, 0) catch |err| switch (err) {
+            error.WaitTimeOut => return false,
+            else => return err,
+        };
+        return true;
+    }
+    return false;
 }
