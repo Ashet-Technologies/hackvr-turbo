@@ -158,10 +158,16 @@ pub fn applyEventToState(state: *State, event: parsing.Event) !void {
             };
         },
         .move => |cmd| {
-            // semantics unclear
+            var iter = state.findGroups(cmd.selector.groups);
+            while (iter.next()) |*grp| {
+                // semantics unclear
+            }
         },
         .rotate => |cmd| {
-            // semantics unclear
+            var iter = state.findGroups(cmd.selector.groups);
+            while (iter.next()) |*grp| {
+                // semantics unclear
+            }
         },
         else => {
             std.debug.print("Event {} not implemented yet!\n", .{@as(parsing.EventType, event)});

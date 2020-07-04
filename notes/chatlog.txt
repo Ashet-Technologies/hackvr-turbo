@@ -1,0 +1,48 @@
+ merpkz hat die Verbindung getrennt (Ping timeout: 20 seconds).
+<epoch> rotation /should/ be group-relative, but I don't have the code for that in my version yet
+<epoch> those movements are absolute
+<epoch> if you put a + before them, they're relative
+<epoch> rotate 0 90 0 #sets rotation to 90
+<epoch> rotate 0 45 0 #sets rotation to 45, not 90 + 45
+<epoch> rotate 0 +45 0 #sets rotation to 45 more than what it was
+<epoch> rotate 0 +-45 0 #sets rotation to 45 less than what it was
+<epoch> and those 0s are absolutes too
+<epoch> so if there was a rotation on the x or z before any of those, they'd get reset to 0
+<epoch> the moves are in the global directions probably
+<epoch> and they set absolute too
+<epoch> unless using + before the values
+<epoch> if you do "forward" it is the group's positive z after rotation
+<epoch> so you can have something loop on: "rotate 0 +5 0" and "move forward" and it'll walk in a circle
+<epoch> "circle"
+<epoch> n-gon of 360/5 sides or something
+<xq> thanks  for clarification :)
+<xq> so move forward is relative, but move +0 +0 +1 is absolute *grin*
+<epoch> I'm kind of AFK doing cleaning, so leave questions and I'll answer when I check my screen.
+<xq> (so to speak: without rotation)
+<xq> but makes implementation easier for me :
+<xq> *girn*
+<xq> no fancy transforms
+<xq> this allows me to display the maze soonish *joy*
+<epoch> the fancy transforms can usually be done by building up multiple commands.
+<SegFault> om mani padme hum
+<epoch> ...
+<epoch> someone said something about an "Abort, Retry, Fail" keychain
+<epoch> but made me think of other situtations where those three options would apply.
+<epoch> > your fetus has Fetal Alcohol Syndrome.
+<epoch> > Abort, Retry, Fail
+<epoch> *cough*
+<epoch> anyway
+* epoch wanders off again
+* ice hat die Verbindung getrennt (Ping timeout: 20 seconds).
+* ice (~ice@loud.house) ist beigetreten.
+* SegFault gibt Channel-Operator-Status an ice
+<epoch> hackvr over gemini.
+<epoch> not just static either
+<epoch> gemini-get gemini://gemini.thebackupbox.net/hackvr-stream | hackvr | tr '\n' '\0' | uriescape | tr '\n' '\0' | xargs -0 -I{} gemini-get 'gemini://gemini.thebackupbox.net/hackvr-input?{}'
+-except/#default- hxxini://gemini.thebackupbox.net/hackvr-stream https://epo.k.vu/9a4d
+-except/#default- title:
+<epoch> or whatever it is
+<epoch> similar would work for http
+<epoch> as long as the protocol can stay open forever.
+<epoch> still not sure if gemini will support that
+<epoch> solderpunk liked that idea of doing tail -f over gemini though
