@@ -33,13 +33,15 @@ pub const Group = struct {
     /// flat list of all shapes
     shapes: std.ArrayList(Shape3D),
 
-    transform: zlm.Mat4,
+    translation: zlm.Vec3,
+    rotation: zlm.Vec3,
 
     pub fn init(allocator: *std.mem.Allocator, name: []const u8) Self {
         return Self{
             .name = name,
             .shapes = std.ArrayList(Shape3D).init(allocator),
-            .transform = zlm.Mat4.identity,
+            .translation = zlm.Vec3.zero,
+            .rotation = zlm.Vec3.zero,
         };
     }
 
@@ -159,14 +161,19 @@ pub fn applyEventToState(state: *State, event: parsing.Event) !void {
         },
         .move => |cmd| {
             var iter = state.findGroups(cmd.selector.groups);
-            while (iter.next()) |*grp| {
-                // semantics unclear
+            while (iter.next()) |grp| {
+                switch (cmd.direction) {
+                    .offset => |offset| {
+                        grp.translation = offset.apply(grp.translation);
+                    },
+                    else => std.debug.panic("relative movement not implemented yet", .{}),
+                }
             }
         },
         .rotate => |cmd| {
             var iter = state.findGroups(cmd.selector.groups);
-            while (iter.next()) |*grp| {
-                // semantics unclear
+            while (iter.next()) |grp| {
+                grp.rotation = cmd.vector.apply(grp.rotation);
             }
         },
         else => {

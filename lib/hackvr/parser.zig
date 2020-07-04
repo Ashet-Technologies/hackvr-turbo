@@ -369,8 +369,8 @@ pub const AbsRelVector = struct {
     pub fn apply(self: Self, v3d: hvr.Vec3D) hvr.Vec3D {
         return .{
             .x = self.x.apply(v3d.x),
-            .y = self.x.apply(v3d.y),
-            .z = self.x.apply(v3d.z),
+            .y = self.y.apply(v3d.y),
+            .z = self.z.apply(v3d.z),
         };
     }
 };

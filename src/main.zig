@@ -153,8 +153,22 @@ pub fn main() anyerror!void {
     var vertex_buffer = try gl.createBuffer();
     defer vertex_buffer.delete();
 
+    const PolygonGroup = struct {
+        transform: zlm.Mat4,
+        begin_tris: usize,
+        count_tris: usize,
+        begin_lines: usize,
+        count_lines: usize,
+    };
+
+    var poly_groups = std.ArrayList(PolygonGroup).init(gpa);
+    defer poly_groups.deinit();
+
     var vertex_list = std.ArrayList(Vertex).init(gpa);
     defer vertex_list.deinit();
+
+    var outline_list = std.ArrayList(Vertex).init(gpa);
+    defer outline_list.deinit();
 
     try vao.vertexBuffer(0, vertex_buffer, 0, @sizeOf(Vertex));
 
@@ -216,8 +230,13 @@ pub fn main() anyerror!void {
     };
 
     try gl.enable(.depth_test);
+    try gl.depthFunc(.less_or_equal);
+
+    var time: f32 = 0.0;
 
     mainLoop: while (true) {
+        time += 1.0 / 60.0;
+
         // process events
         {
             var event: c.SDL_Event = undefined;
@@ -232,9 +251,21 @@ pub fn main() anyerror!void {
         // Render scene from HackVR dataset
         {
             vertex_list.shrink(0);
+            poly_groups.shrink(0);
 
             var groups = state.iterator();
             while (groups.next()) |group| {
+                var poly_grp = PolygonGroup{
+                    .begin_tris = vertex_list.items.len,
+                    .count_tris = undefined,
+                    .begin_lines = outline_list.items.len,
+                    .count_lines = undefined,
+                    .transform = zlm.Mat4.mul(
+                        zlm.Mat4.createAngleAxis(zlm.Vec3.unitY, zlm.toRadians(group.rotation.y)),
+                        zlm.Mat4.createTranslation(group.translation),
+                    ),
+                };
+
                 for (group.shapes.items) |shape| {
                     if (shape.points.len < 3) {
                         std.debug.print("count: {}\n", .{shape.points.len});
@@ -258,21 +289,44 @@ pub fn main() anyerror!void {
 
                             i += 1;
                         }
+
+                        i = 1;
+                        while (i < shape.points.len) {
+                            try outline_list.append(Vertex{
+                                .position = shape.points[i - 1],
+                                .color = palette[15],
+                            });
+                            try outline_list.append(Vertex{
+                                .position = shape.points[i],
+                                .color = palette[15],
+                            });
+                            i += 1;
+                        }
+                        try outline_list.append(Vertex{
+                            .position = shape.points[0],
+                            .color = palette[15],
+                        });
+                        try outline_list.append(Vertex{
+                            .position = shape.points[shape.points.len - 1],
+                            .color = palette[15],
+                        });
                     }
                 }
+                poly_grp.count_tris = vertex_list.items.len - poly_grp.begin_tris;
+                poly_grp.count_lines = outline_list.items.len - poly_grp.begin_lines;
+
+                try poly_groups.append(poly_grp);
             }
         }
 
-        try gl.namedBufferData(vertex_buffer, Vertex, vertex_list.items, .dynamic_draw);
-
         const mat_proj = zlm.Mat4.createPerspective(1.0, 16.0 / 9.0, 0.1, 10000.0);
         const mat_view = zlm.Mat4.createLookAt(
-            .{ .x = -20, .y = 0, .z = 0 },
+            .{ .x = -50, .y = 30, .z = 0 },
             .{ .x = 0, .y = 0, .z = 0 },
-            .{ .x = 0, .y = 1, .z = 0 },
+            zlm.Vec3.unitY,
         );
 
-        const mat_view_proj = zlm.Mat4.mul(mat_view, mat_proj);
+        const mat_view_proj = zlm.Mat4.createAngleAxis(zlm.Vec3.unitY, time).mul(mat_view.mul(mat_proj));
 
         // render graphics
         {
@@ -286,14 +340,32 @@ pub fn main() anyerror!void {
             try vao.bind();
             try shader_program.use();
 
-            try gl.programUniformMatrix4(
-                shader_program,
-                transform_loc,
-                false,
-                @ptrCast([*]const [4][4]f32, &mat_view_proj.fields)[0..1],
-            );
+            try gl.namedBufferData(vertex_buffer, Vertex, vertex_list.items, .dynamic_draw);
 
-            try gl.drawArrays(.triangles, 0, vertex_list.items.len);
+            for (poly_groups.items) |poly_grp| {
+                const transform = zlm.Mat4.mul(poly_grp.transform, mat_view_proj);
+
+                try gl.programUniformMatrix4(
+                    shader_program,
+                    transform_loc,
+                    false,
+                    @ptrCast([*]const [4][4]f32, &transform.fields)[0..1],
+                );
+
+                try gl.drawArrays(.triangles, poly_grp.begin_tris, poly_grp.count_tris);
+            }
+            try gl.namedBufferData(vertex_buffer, Vertex, outline_list.items, .dynamic_draw);
+            for (poly_groups.items) |poly_grp| {
+                const transform = zlm.Mat4.mul(poly_grp.transform, mat_view_proj);
+
+                try gl.programUniformMatrix4(
+                    shader_program,
+                    transform_loc,
+                    false,
+                    @ptrCast([*]const [4][4]f32, &transform.fields)[0..1],
+                );
+                try gl.drawArrays(.lines, poly_grp.begin_lines, poly_grp.count_lines);
+            }
 
             c.SDL_GL_SwapWindow(window);
             c.SDL_Delay(10);
