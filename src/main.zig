@@ -778,65 +778,89 @@ fn isDataOnStdInAvailable() !bool {
     return false;
 }
 
-fn rayTriangleIntersect(orig: zlm.Vec3, dir: zlm.Vec3, v0: zlm.Vec3, v1: zlm.Vec3, v2: zlm.Vec3) ?f32 {
-    const kEpsilon = 1e-10;
+fn rayTriangleIntersect(ro: zlm.Vec3, rd: zlm.Vec3, v0: zlm.Vec3, v1: zlm.Vec3, v2: zlm.Vec3) ?f32 {
+    const a = v0.sub(v1);
+    const b = v2.sub(v1);
+    const p = v0.sub(ro);
+    const n = b.cross(a);
+    const q = p.cross(rd);
 
-    // compute plane's normal
-    const v0v1 = v1.sub(v0);
-    const v0v2 = v2.sub(v0);
-    // no need to normalize
-    const N = v0v1.cross(v0v2); // N
-    const area2 = N.length();
+    const idet = 1.0 / rd.dot(n);
 
-    // Step 1: finding P
+    const u = q.dot(b) * idet;
+    const v = q.dot(a) * idet;
+    const t = n.dot(p) * idet;
 
-    // check if ray and plane are parallel ?
-    const NdotRayDirection = N.dot(dir);
-    if (std.math.absFloat(NdotRayDirection) < kEpsilon) { // almost 0
-        return null; // they are parallel so they don't intersect !
-    }
-
-    // compute d parameter using equation 2
-    const d = N.dot(v0);
-
-    // compute t (equation 3)
-    const t = (N.dot(orig) + d) / NdotRayDirection;
-    // check if the triangle is in behind the ray
     if (t < 0) {
-        return null; // the triangle is behind
+        return null;
     }
 
-    // compute the intersection point using equation 1
-    const P = orig.add(dir.scale(t));
-
-    // Step 2: inside-outside test
-
-    // edge 0
-    const edge0 = v1.sub(v0);
-    const vp0 = P.sub(v0);
-    const C0 = edge0.cross(vp0); // vector perpendicular to triangle's plane
-    const side_0 = (N.dot(C0) < 0);
-    if (side_0)
+    if (u < 0 or u > 1 or v < 0 or (u + v) > 1) {
         return null;
+    }
 
-    // edge 1
-    const edge1 = v2.sub(v1);
-    const vp1 = P.sub(v1);
-    const C1 = edge1.cross(vp1);
-    const side_1 = (N.dot(C1) < 0);
-    if (side_1)
-        return null;
-
-    // edge 2
-    const edge2 = v0.sub(v2);
-    const vp2 = P.sub(v2);
-    const C2 = edge2.cross(vp2);
-    const side_2 = (N.dot(C2) < 0);
-    if (side_2)
-        return null;
-
-    return t; // this ray hits the triangle
+    return t;
 }
+
+// fn rayTriangleIntersect(orig: zlm.Vec3, dir: zlm.Vec3, v0: zlm.Vec3, v1: zlm.Vec3, v2: zlm.Vec3) ?f32 {
+//     const kEpsilon = 1e-10;
+
+//     // compute plane's normal
+//     const v0v1 = v1.sub(v0);
+//     const v0v2 = v2.sub(v0);
+//     // no need to normalize
+//     const N = v0v1.cross(v0v2); // N
+//     const area2 = N.length();
+
+//     // Step 1: finding P
+
+//     // check if ray and plane are parallel ?
+//     const NdotRayDirection = N.dot(dir);
+//     if (std.math.absFloat(NdotRayDirection) < kEpsilon) { // almost 0
+//         return null; // they are parallel so they don't intersect !
+//     }
+
+//     // compute d parameter using equation 2
+//     const d = N.dot(v0);
+
+//     // compute t (equation 3)
+//     const t = (N.dot(orig) + d) / NdotRayDirection;
+//     // check if the triangle is in behind the ray
+//     if (t < 0) {
+//         return null; // the triangle is behind
+//     }
+
+//     // compute the intersection point using equation 1
+//     const P = orig.add(dir.scale(t));
+
+//     // Step 2: inside-outside test
+
+//     // edge 0
+//     const edge0 = v1.sub(v0);
+//     const vp0 = P.sub(v0);
+//     const C0 = edge0.cross(vp0); // vector perpendicular to triangle's plane
+//     const side_0 = (N.dot(C0) < 0);
+//     if (side_0)
+//         return null;
+
+//     // edge 1
+//     const edge1 = v2.sub(v1);
+//     const vp1 = P.sub(v1);
+//     const C1 = edge1.cross(vp1);
+//     const side_1 = (N.dot(C1) < 0);
+//     if (side_1)
+//         return null;
+
+//     // edge 2
+//     const edge2 = v0.sub(v2);
+//     const vp2 = P.sub(v2);
+//     const C2 = edge2.cross(vp2);
+//     const side_2 = (N.dot(C2) < 0);
+//     if (side_2)
+//         return null;
+
+//     return t; // this ray hits the triangle
+// }
 
 fn invertMatrix(mat: zlm.Mat4) ?zlm.Mat4 {
     const m = @bitCast([16]f32, mat.fields);
