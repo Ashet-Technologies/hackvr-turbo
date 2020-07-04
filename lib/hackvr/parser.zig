@@ -278,6 +278,13 @@ pub const Parser = struct {
                                 .error_type = .argument_mismatch,
                             },
                         },
+                        error.InvalidArgument => return PushResult{
+                            .parse_error = .{
+                                .source = line,
+                                .rest = rest,
+                                .error_type = .invalid_argument,
+                            },
+                        },
                         else => return err,
                     };
 
@@ -328,6 +335,7 @@ pub const PushResult = union(enum) {
             invalid_format,
             unknown_command,
             argument_mismatch,
+            invalid_argument,
         };
 
         /// The portion that triggered the error.

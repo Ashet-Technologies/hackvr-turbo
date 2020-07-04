@@ -134,6 +134,9 @@ pub fn main() anyerror!void {
     var lines_vertex_buffer = try gl.createBuffer();
     defer lines_vertex_buffer.delete();
 
+    var point_vertex_buffer = try gl.createBuffer();
+    defer point_vertex_buffer.delete();
+
     const PolygonGroup = struct {
         group_index: usize,
         transform: zlm.Mat4,
@@ -148,6 +151,9 @@ pub fn main() anyerror!void {
 
     var vertex_list = std.ArrayList(Vertex).init(gpa);
     defer vertex_list.deinit();
+
+    var point_list = std.ArrayList(Vertex).init(gpa);
+    defer point_list.deinit();
 
     var outline_list = std.ArrayList(Vertex).init(gpa);
     defer outline_list.deinit();
@@ -216,8 +222,7 @@ pub fn main() anyerror!void {
 
     try gl.enable(.depth_test);
     try gl.depthFunc(.less_or_equal);
-    try gl.enable(.polygon_offset_line);
-    try gl.polygonOffset(0.0, -16.0);
+    try gl.pointSize(5.0);
 
     var time: f32 = 0.0;
 
@@ -249,6 +254,7 @@ pub fn main() anyerror!void {
     const dt = 1.0 / 60.0;
 
     mainLoop: while (true) : (time += dt) {
+        point_list.shrink(0);
 
         // process HackVR events
         if (try isDataOnStdInAvailable()) {
@@ -488,13 +494,17 @@ pub fn main() anyerror!void {
         };
 
         var picked_shape: ?PickedShape = blk: {
+            var window_w: c_int = undefined;
+            var window_h: c_int = undefined;
+            c.SDL_GetWindowSize(window, &window_w, &window_h);
+
             var mouse_x: c_int = undefined;
             var mouse_y: c_int = undefined;
             _ = c.SDL_GetMouseState(&mouse_x, &mouse_y);
 
             var mouse_pos_near_ss = zlm.Vec4{
-                .x = 2.0 * @intToFloat(f32, mouse_x) / 1279.0 - 1.0,
-                .y = 1.0 - 2.0 * @intToFloat(f32, mouse_y) / 719.0,
+                .x = 2.0 * @intToFloat(f32, mouse_x) / @intToFloat(f32, window_w - 1) - 1.0,
+                .y = 1.0 - 2.0 * @intToFloat(f32, mouse_y) / @intToFloat(f32, window_h - 1),
                 .z = 0.0,
                 .w = 1.0,
             };
@@ -515,18 +525,25 @@ pub fn main() anyerror!void {
 
             // std.debug.print("ws {} {}\n", .{ mouse_pos_near_ws, mouse_pos_far_ws });
 
-            var ray_origin = mouse_pos_near_ws.swizzle("xyz");
+            const Buffer = struct {
+                var orig: zlm.Vec3 = undefined;
+                var dir: zlm.Vec3 = undefined;
+            };
 
-            var ray_direction = mouse_pos_far_ws.swizzle("xyz").sub(ray_origin).normalize();
+            if (c.SDL_GetKeyboardState(null)[c.SDL_SCANCODE_SPACE] != 0) {
+                Buffer.orig = mouse_pos_near_ws.swizzle("xyz");
+                Buffer.dir = mouse_pos_far_ws.swizzle("xyz").sub(Buffer.orig).normalize();
+            }
+            if (c.SDL_GetKeyboardState(null)[c.SDL_SCANCODE_V] != 0) {
+                Buffer.dir = Buffer.dir.transformDirection(zlm.Mat4.createAngleAxis(zlm.Vec3.unitY, dt));
+            }
 
-            try outline_list.append(Vertex{
-                .position = ray_origin,
-                .color = parseColor("#FF00FF"),
-            });
-            try outline_list.append(Vertex{
-                .position = ray_origin.add(ray_direction.scale(100)),
-                .color = parseColor("#FF00FF"),
-            });
+            var ray_origin = Buffer.orig;
+            var ray_direction = Buffer.dir;
+
+            // var ray_origin = mouse_pos_near_ws.swizzle("xyz");
+
+            // var ray_direction = mouse_pos_far_ws.swizzle("xyz").sub(ray_origin).normalize();
 
             var distance = std.math.inf(f32);
 
@@ -568,9 +585,62 @@ pub fn main() anyerror!void {
 
                             i += 1;
                         }
+                        i = 0;
+
+                        while (i < shape.points.len) {
+                            try point_list.append(Vertex{
+                                .position = shape.points[i].transformPosition(transform),
+                                .color = parseColor("#FF0000"),
+                            });
+                            i += 1;
+                        }
                     }
                 }
             }
+
+            {
+                var step: usize = 0;
+                var dist: f32 = 0.0;
+                var pos = ray_origin;
+                while (step < 250) : (step += 1) {
+                    try point_list.append(Vertex{
+                        .position = pos,
+                        .color = if (dist < distance) parseColor("#FFFF00") else parseColor("#0000FF"),
+                    });
+                    pos = pos.add(ray_direction.scale(0.25));
+                    dist += 0.25;
+                }
+            }
+
+            const size = 0.1;
+
+            if (result != null) {
+                try point_list.append(Vertex{
+                    .position = ray_origin.add(ray_direction.scale(distance)).sub(zlm.Vec3.unitX.scale(size)),
+                    .color = parseColor("#FF00FF"),
+                });
+                try point_list.append(Vertex{
+                    .position = ray_origin.add(ray_direction.scale(distance)).add(zlm.Vec3.unitX.scale(size)),
+                    .color = parseColor("#FF00FF"),
+                });
+                try point_list.append(Vertex{
+                    .position = ray_origin.add(ray_direction.scale(distance)).sub(zlm.Vec3.unitY.scale(size)),
+                    .color = parseColor("#FF00FF"),
+                });
+                try point_list.append(Vertex{
+                    .position = ray_origin.add(ray_direction.scale(distance)).add(zlm.Vec3.unitY.scale(size)),
+                    .color = parseColor("#FF00FF"),
+                });
+                try point_list.append(Vertex{
+                    .position = ray_origin.add(ray_direction.scale(distance)).sub(zlm.Vec3.unitZ.scale(size)),
+                    .color = parseColor("#FF00FF"),
+                });
+                try point_list.append(Vertex{
+                    .position = ray_origin.add(ray_direction.scale(distance)).add(zlm.Vec3.unitZ.scale(size)),
+                    .color = parseColor("#FF00FF"),
+                });
+            }
+
             break :blk result;
         };
 
@@ -585,6 +655,7 @@ pub fn main() anyerror!void {
 
         try gl.namedBufferData(tris_vertex_buffer, Vertex, vertex_list.items, .dynamic_draw);
         try gl.namedBufferData(lines_vertex_buffer, Vertex, outline_list.items, .dynamic_draw);
+        try gl.namedBufferData(point_vertex_buffer, Vertex, point_list.items, .dynamic_draw);
 
         // render graphics
         {
@@ -618,6 +689,9 @@ pub fn main() anyerror!void {
                 try gl.drawArrays(.triangles, poly_grp.begin_tris, poly_grp.count_tris);
             }
 
+            // try gl.enable(.polygon_offset_line);
+            // try gl.polygonOffset(0.0, -16.0);
+
             try vao.vertexBuffer(0, lines_vertex_buffer, 0, @sizeOf(Vertex));
             for (poly_groups.items) |poly_grp| {
                 const transform = zlm.Mat4.mul(poly_grp.transform, mat_view_proj);
@@ -642,14 +716,17 @@ pub fn main() anyerror!void {
                 try gl.drawArrays(.lines, poly_grp.begin_lines, poly_grp.count_lines);
             }
 
-            var transform = mat_view_proj;
-            try gl.programUniformMatrix4(
-                shader_program,
-                transform_loc,
-                false,
-                @ptrCast([*]const [4][4]f32, &transform.fields)[0..1],
-            );
-            try gl.drawArrays(.lines, outline_list.items.len - 2, 2);
+            try vao.vertexBuffer(0, point_vertex_buffer, 0, @sizeOf(Vertex));
+            {
+                var transform = mat_view_proj;
+                try gl.programUniformMatrix4(
+                    shader_program,
+                    transform_loc,
+                    false,
+                    @ptrCast([*]const [4][4]f32, &transform.fields)[0..1],
+                );
+                try gl.drawArrays(.points, 0, point_list.items.len);
+            }
 
             c.SDL_GL_SwapWindow(window);
             c.SDL_Delay(10);
@@ -702,7 +779,7 @@ fn isDataOnStdInAvailable() !bool {
 }
 
 fn rayTriangleIntersect(orig: zlm.Vec3, dir: zlm.Vec3, v0: zlm.Vec3, v1: zlm.Vec3, v2: zlm.Vec3) ?f32 {
-    const kEpsilon = 0.0001;
+    const kEpsilon = 1e-10;
 
     // compute plane's normal
     const v0v1 = v1.sub(v0);
@@ -738,25 +815,25 @@ fn rayTriangleIntersect(orig: zlm.Vec3, dir: zlm.Vec3, v0: zlm.Vec3, v1: zlm.Vec
     const edge0 = v1.sub(v0);
     const vp0 = P.sub(v0);
     const C0 = edge0.cross(vp0); // vector perpendicular to triangle's plane
-    if (N.dot(C0) < 0) {
-        return null; // P is on the right side
-    }
+    const side_0 = (N.dot(C0) < 0);
+    if (side_0)
+        return null;
 
     // edge 1
     const edge1 = v2.sub(v1);
     const vp1 = P.sub(v1);
     const C1 = edge1.cross(vp1);
-    if (N.dot(C1) < 0) {
-        return null; // P is on the right side
-    }
+    const side_1 = (N.dot(C1) < 0);
+    if (side_1)
+        return null;
 
     // edge 2
     const edge2 = v0.sub(v2);
     const vp2 = P.sub(v2);
     const C2 = edge2.cross(vp2);
-    if (N.dot(C2) < 0) {
-        return null; // P is on the right side;
-    }
+    const side_2 = (N.dot(C2) < 0);
+    if (side_2)
+        return null;
 
     return t; // this ray hits the triangle
 }
