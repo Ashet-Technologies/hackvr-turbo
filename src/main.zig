@@ -228,8 +228,20 @@ pub fn main() anyerror!void {
         std.os.O_NONBLOCK | try std.os.fcntl(std.io.getStdIn().handle, std.os.F_GETFL, 0),
     );
 
-    mainLoop: while (true) {
-        time += 1.0 / 60.0;
+    const Camera = struct {
+        position: zlm.Vec3,
+        pan: f32,
+        tilt: f32,
+    };
+    var camera = Camera{
+        .position = zlm.Vec3.zero,
+        .pan = 0,
+        .tilt = 0,
+    };
+
+    const dt = 1.0 / 60.0;
+
+    mainLoop: while (true) : (time += dt) {
 
         // process HackVR events
         if (try isDataOnStdInAvailable()) {
@@ -278,11 +290,82 @@ pub fn main() anyerror!void {
             while (c.SDL_PollEvent(&event) != 0) {
                 switch (event.type) {
                     c.SDL_QUIT => break :mainLoop,
+                    c.SDL_MOUSEMOTION => {
+                        const motion = &event.motion;
+
+                        if ((motion.state & 4) != 0) {
+                            camera.pan -= @intToFloat(f32, motion.xrel) / 150.0;
+                            camera.tilt -= @intToFloat(f32, motion.yrel) / 150.0;
+                        }
+                    },
                     else => {
                         // std.log.notice(.HackVR, "Unhandled event: {}\n", .{event.type});
                     },
                 }
             }
+
+            const movespeed = 7.5;
+            const turnspeed = 2.0;
+
+            const keys = c.SDL_GetKeyboardState(null);
+
+            var move_dir = zlm.Vec3.zero;
+
+            if ((keys[c.SDL_SCANCODE_UP] != 0) or (keys[c.SDL_SCANCODE_W] != 0)) {
+                move_dir.z -= 1;
+            }
+            if ((keys[c.SDL_SCANCODE_DOWN] != 0) or (keys[c.SDL_SCANCODE_S] != 0)) {
+                move_dir.z += 1;
+            }
+
+            if (keys[c.SDL_SCANCODE_D] != 0) {
+                move_dir.x -= 1;
+            }
+            if (keys[c.SDL_SCANCODE_A] != 0) {
+                move_dir.x += 1;
+            }
+
+            if (keys[c.SDL_SCANCODE_LALT] != 0) {
+                // Strafing
+                if (keys[c.SDL_SCANCODE_RIGHT] != 0) {
+                    move_dir.x -= 1;
+                }
+                if (keys[c.SDL_SCANCODE_LEFT] != 0) {
+                    move_dir.x += 1;
+                }
+            } else {
+                // Turning
+                if (keys[c.SDL_SCANCODE_RIGHT] != 0) {
+                    camera.pan -= turnspeed * dt;
+                }
+                if (keys[c.SDL_SCANCODE_LEFT] != 0) {
+                    camera.pan += turnspeed * dt;
+                }
+            }
+
+            if (keys[c.SDL_SCANCODE_LALT] != 0) {
+                if (keys[c.SDL_SCANCODE_PAGEUP] != 0) {
+                    move_dir.y += 1;
+                }
+                if (keys[c.SDL_SCANCODE_PAGEDOWN] != 0) {
+                    move_dir.y -= 1;
+                }
+            } else {
+                // Tilting
+                if (keys[c.SDL_SCANCODE_PAGEUP] != 0) {
+                    camera.tilt += turnspeed * dt;
+                }
+                if (keys[c.SDL_SCANCODE_PAGEDOWN] != 0) {
+                    camera.tilt -= turnspeed * dt;
+                }
+            }
+
+            const pan_rot = zlm.Mat4.createAngleAxis(zlm.Vec3.unitY, camera.pan);
+            const tilt_rot = zlm.Mat4.createAngleAxis(zlm.Vec3.unitX.scale(-1), camera.tilt);
+
+            move_dir = move_dir.transformDirection(tilt_rot.mul(pan_rot));
+
+            camera.position = camera.position.add(move_dir.scale(movespeed * dt));
         }
 
         // Render scene from HackVR dataset
@@ -362,13 +445,17 @@ pub fn main() anyerror!void {
         }
 
         const mat_proj = zlm.Mat4.createPerspective(1.0, 16.0 / 9.0, 0.1, 10000.0);
-        const mat_view = zlm.Mat4.createLookAt(
-            .{ .x = -50, .y = 30, .z = 0 },
-            .{ .x = 0, .y = 0, .z = 0 },
+        const mat_view = zlm.Mat4.createLook(
+            camera.position,
+            zlm.Vec3{
+                .x = std.math.sin(camera.pan) * std.math.cos(camera.tilt),
+                .y = std.math.sin(camera.tilt),
+                .z = -std.math.cos(camera.pan) * std.math.cos(camera.tilt),
+            },
             zlm.Vec3.unitY,
         );
 
-        const mat_view_proj = zlm.Mat4.createAngleAxis(zlm.Vec3.unitY, 0.3 * time).mul(mat_view.mul(mat_proj));
+        const mat_view_proj = mat_view.mul(mat_proj);
 
         // render graphics
         {
