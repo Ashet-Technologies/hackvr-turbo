@@ -394,7 +394,7 @@ pub fn main() anyerror!void {
         }
 
         // Render scene from HackVR dataset
-        if (hackvr_dirty) {
+        if (hackvr_dirty or true) {
             hackvr_dirty = false;
 
             vertex_list.shrink(0);
@@ -415,7 +415,7 @@ pub fn main() anyerror!void {
                     ),
                 };
 
-                for (group.shapes.items) |shape| {
+                for (group.shapes.items) |*shape| {
                     if (shape.points.len < 3) {
                         std.debug.print("count: {}\n", .{shape.points.len});
                     } else {
@@ -502,6 +502,23 @@ pub fn main() anyerror!void {
             var mouse_y: c_int = undefined;
             _ = c.SDL_GetMouseState(&mouse_x, &mouse_y);
 
+            // var f = try std.fs.cwd().createFile("debug.pgm", .{ .truncate = true });
+            // defer f.close();
+
+            // try f.writeAll("P5 1280 720 255\n");
+
+            // var f = try std.fs.cwd().createFile("debug.stl", .{ .truncate = true });
+            // defer f.close();
+
+            // try f.writeAll(&@as([80]u8, undefined));
+
+            // try f.writeAll("\x00\x00\x00\x00");
+            // var cnt: usize = 0;
+
+            // mouse_y = 0;
+            // while (mouse_y < 720) : (mouse_y += 1) {
+            //     mouse_x = 0;
+            //     while (mouse_x < 1280) : (mouse_x += 1) {
             var mouse_pos_near_ss = zlm.Vec4{
                 .x = 2.0 * @intToFloat(f32, mouse_x) / @intToFloat(f32, window_w - 1) - 1.0,
                 .y = 1.0 - 2.0 * @intToFloat(f32, mouse_y) / @intToFloat(f32, window_h - 1),
@@ -530,10 +547,10 @@ pub fn main() anyerror!void {
                 var dir: zlm.Vec3 = undefined;
             };
 
-            if (c.SDL_GetKeyboardState(null)[c.SDL_SCANCODE_SPACE] != 0) {
-                Buffer.orig = mouse_pos_near_ws.swizzle("xyz");
-                Buffer.dir = mouse_pos_far_ws.swizzle("xyz").sub(Buffer.orig).normalize();
-            }
+            //if (c.SDL_GetKeyboardState(null)[c.SDL_SCANCODE_SPACE] != 0) {
+            Buffer.orig = mouse_pos_near_ws.swizzle("xyz");
+            Buffer.dir = mouse_pos_far_ws.swizzle("xyz").sub(Buffer.orig).normalize();
+            //}
             if (c.SDL_GetKeyboardState(null)[c.SDL_SCANCODE_V] != 0) {
                 Buffer.dir = Buffer.dir.transformDirection(zlm.Mat4.createAngleAxis(zlm.Vec3.unitY, dt));
             }
@@ -563,14 +580,27 @@ pub fn main() anyerror!void {
                     } else {
                         // Simple fan-out triangulation.
                         // Not beautiful, but very simple
+                        const pivot = shape.points[0].transformPosition(transform);
+
+                        var chain_point = shape.points[1].transformPosition(transform);
+
                         var i: usize = 2;
                         while (i < shape.points.len) {
+                            const point = shape.points[i].transformPosition(transform);
+
+                            // try f.writeAll(&@bitCast([12]u8, zlm.Vec3{ .x = 0, .y = 0, .z = 0 }));
+                            // try f.writeAll(&@bitCast([12]u8, pivot));
+                            // try f.writeAll(&@bitCast([12]u8, chain_point));
+                            // try f.writeAll(&@bitCast([12]u8, point));
+                            // try f.writeAll("\x00\x00");
+                            // cnt += 1;
+
                             if (rayTriangleIntersect(
                                 ray_origin,
                                 ray_direction,
-                                shape.points[0].transformPosition(transform),
-                                shape.points[i - 1].transformPosition(transform),
-                                shape.points[i].transformPosition(transform),
+                                pivot,
+                                chain_point,
+                                point,
                             )) |dist| {
                                 if (dist < distance) {
                                     distance = dist;
@@ -582,64 +612,74 @@ pub fn main() anyerror!void {
                                     };
                                 }
                             }
+                            chain_point = point;
 
                             i += 1;
                         }
                         i = 0;
 
-                        while (i < shape.points.len) {
-                            try point_list.append(Vertex{
-                                .position = shape.points[i].transformPosition(transform),
-                                .color = parseColor("#FF0000"),
-                            });
-                            i += 1;
-                        }
+                        // while (i < shape.points.len) {
+                        //     try point_list.append(Vertex{
+                        //         .position = shape.points[i].transformPosition(transform),
+                        //         .color = parseColor("#FF0000"),
+                        //     });
+                        //     i += 1;
+                        // }
                     }
                 }
             }
 
-            {
-                var step: usize = 0;
-                var dist: f32 = 0.0;
-                var pos = ray_origin;
-                while (step < 250) : (step += 1) {
-                    try point_list.append(Vertex{
-                        .position = pos,
-                        .color = if (dist < distance) parseColor("#FFFF00") else parseColor("#0000FF"),
-                    });
-                    pos = pos.add(ray_direction.scale(0.25));
-                    dist += 0.25;
-                }
-            }
+            // try f.seekTo(80);
+            // try f.writeAll(&@bitCast([4]u8, @intCast(u32, cnt)));
+
+            // try f.writeAll(if (result != null) "\xFF" else "\x00");
+            //     }
+            // }
+
+            // break :blk null;
+
+            // {
+            //     var step: usize = 0;
+            //     var dist: f32 = 0.0;
+            //     var pos = ray_origin;
+            //     while (step < 250) : (step += 1) {
+            //         try point_list.append(Vertex{
+            //             .position = pos,
+            //             .color = if (dist < distance) parseColor("#FFFF00") else parseColor("#0000FF"),
+            //         });
+            //         pos = pos.add(ray_direction.scale(0.25));
+            //         dist += 0.25;
+            //     }
+            // }
 
             const size = 0.1;
 
-            if (result != null) {
-                try point_list.append(Vertex{
-                    .position = ray_origin.add(ray_direction.scale(distance)).sub(zlm.Vec3.unitX.scale(size)),
-                    .color = parseColor("#FF00FF"),
-                });
-                try point_list.append(Vertex{
-                    .position = ray_origin.add(ray_direction.scale(distance)).add(zlm.Vec3.unitX.scale(size)),
-                    .color = parseColor("#FF00FF"),
-                });
-                try point_list.append(Vertex{
-                    .position = ray_origin.add(ray_direction.scale(distance)).sub(zlm.Vec3.unitY.scale(size)),
-                    .color = parseColor("#FF00FF"),
-                });
-                try point_list.append(Vertex{
-                    .position = ray_origin.add(ray_direction.scale(distance)).add(zlm.Vec3.unitY.scale(size)),
-                    .color = parseColor("#FF00FF"),
-                });
-                try point_list.append(Vertex{
-                    .position = ray_origin.add(ray_direction.scale(distance)).sub(zlm.Vec3.unitZ.scale(size)),
-                    .color = parseColor("#FF00FF"),
-                });
-                try point_list.append(Vertex{
-                    .position = ray_origin.add(ray_direction.scale(distance)).add(zlm.Vec3.unitZ.scale(size)),
-                    .color = parseColor("#FF00FF"),
-                });
-            }
+            // if (result != null) {
+            //     try point_list.append(Vertex{
+            //         .position = ray_origin.add(ray_direction.scale(distance)).sub(zlm.Vec3.unitX.scale(size)),
+            //         .color = parseColor("#FF00FF"),
+            //     });
+            //     try point_list.append(Vertex{
+            //         .position = ray_origin.add(ray_direction.scale(distance)).add(zlm.Vec3.unitX.scale(size)),
+            //         .color = parseColor("#FF00FF"),
+            //     });
+            //     try point_list.append(Vertex{
+            //         .position = ray_origin.add(ray_direction.scale(distance)).sub(zlm.Vec3.unitY.scale(size)),
+            //         .color = parseColor("#FF00FF"),
+            //     });
+            //     try point_list.append(Vertex{
+            //         .position = ray_origin.add(ray_direction.scale(distance)).add(zlm.Vec3.unitY.scale(size)),
+            //         .color = parseColor("#FF00FF"),
+            //     });
+            //     try point_list.append(Vertex{
+            //         .position = ray_origin.add(ray_direction.scale(distance)).sub(zlm.Vec3.unitZ.scale(size)),
+            //         .color = parseColor("#FF00FF"),
+            //     });
+            //     try point_list.append(Vertex{
+            //         .position = ray_origin.add(ray_direction.scale(distance)).add(zlm.Vec3.unitZ.scale(size)),
+            //         .color = parseColor("#FF00FF"),
+            //     });
+            // }
 
             break :blk result;
         };
@@ -689,8 +729,8 @@ pub fn main() anyerror!void {
                 try gl.drawArrays(.triangles, poly_grp.begin_tris, poly_grp.count_tris);
             }
 
-            // try gl.enable(.polygon_offset_line);
-            // try gl.polygonOffset(0.0, -16.0);
+            try gl.enable(.polygon_offset_line);
+            try gl.polygonOffset(0.0, -16.0);
 
             try vao.vertexBuffer(0, lines_vertex_buffer, 0, @sizeOf(Vertex));
             for (poly_groups.items) |poly_grp| {
@@ -779,28 +819,49 @@ fn isDataOnStdInAvailable() !bool {
 }
 
 fn rayTriangleIntersect(ro: zlm.Vec3, rd: zlm.Vec3, v0: zlm.Vec3, v1: zlm.Vec3, v2: zlm.Vec3) ?f32 {
-    const a = v0.sub(v1);
-    const b = v2.sub(v1);
-    const p = v0.sub(ro);
-    const n = b.cross(a);
-    const q = p.cross(rd);
-
-    const idet = 1.0 / rd.dot(n);
-
-    const u = q.dot(b) * idet;
-    const v = q.dot(a) * idet;
-    const t = n.dot(p) * idet;
-
+    const v1v0 = v1.sub(v0);
+    const v2v0 = v2.sub(v0);
+    const rov0 = ro.sub(v0);
+    const n = zlm.Vec3.cross(v1v0, v2v0);
+    const q = zlm.Vec3.cross(rov0, rd);
+    const d = 1.0 / zlm.Vec3.dot(rd, n);
+    const u = d * zlm.Vec3.dot(q.scale(-1), v2v0);
+    const v = d * zlm.Vec3.dot(q, v1v0);
+    const t = d * zlm.Vec3.dot(n.scale(-1), rov0);
     if (t < 0) {
         return null;
     }
-
-    if (u < 0 or u > 1 or v < 0 or (u + v) > 1) {
+    if (u < 0.0 or u > 1.0 or v < 0.0 or (u + v) > 1.0) {
+        //  t = -1.0;
         return null;
     }
-
     return t;
+    // return vec3( t, u, v );
 }
+
+// fn rayTriangleIntersect(ro: zlm.Vec3, rd: zlm.Vec3, v0: zlm.Vec3, v1: zlm.Vec3, v2: zlm.Vec3) ?f32 {
+//     const a = v0.sub(v1);
+//     const b = v2.sub(v1);
+//     const p = v0.sub(ro);
+//     const n = b.cross(a);
+//     const q = p.cross(rd);
+
+//     const idet = 1.0 / rd.dot(n);
+
+//     const u = q.dot(b) * idet;
+//     const v = q.dot(a) * idet;
+//     const t = n.dot(p) * idet;
+
+//     if (t < 0) {
+//         return null;
+//     }
+
+//     if (u < 0 or u > 1 or v < 0 or (u + v) > 1) {
+//         return null;
+//     }
+
+//     return t;
+// }
 
 // fn rayTriangleIntersect(orig: zlm.Vec3, dir: zlm.Vec3, v0: zlm.Vec3, v1: zlm.Vec3, v2: zlm.Vec3) ?f32 {
 //     const kEpsilon = 1e-10;
