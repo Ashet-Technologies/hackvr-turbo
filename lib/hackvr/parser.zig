@@ -108,12 +108,12 @@ pub const Parser = struct {
                         },
                     };
                 } else if (std.mem.eql(u8, cmd, "renamegroup")) {
-                    if (args.len != 1)
+                    if (args.len != 2)
                         return error.ArgumentMismatch;
                     return Event{
                         .rename_group = GroupArgSelector{
                             .selector = selector,
-                            .groups = args[0],
+                            .groups = args[1],
                         },
                     };
                 } else if (std.mem.eql(u8, cmd, "export")) {

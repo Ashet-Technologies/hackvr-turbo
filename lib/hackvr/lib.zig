@@ -176,6 +176,14 @@ pub fn applyEventToState(state: *State, event: parsing.Event) !void {
                 grp.rotation = cmd.vector.apply(grp.rotation);
             }
         },
+        .rename_group => |cmd| {
+            var new_name = try std.mem.dupe(&state.arena.allocator, u8, cmd.groups);
+
+            var iter = state.findGroups(cmd.selector.groups);
+            while (iter.next()) |grp| {
+                grp.name = new_name;
+            }
+        },
         else => {
             std.debug.print("Event {} not implemented yet!\n", .{@as(parsing.EventType, event)});
         },
