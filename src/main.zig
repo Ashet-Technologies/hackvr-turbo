@@ -150,8 +150,11 @@ pub fn main() anyerror!void {
     try vao.attribBinding(0, 0);
     try vao.attribBinding(1, 0);
 
-    var vertex_buffer = try gl.createBuffer();
-    defer vertex_buffer.delete();
+    var tris_vertex_buffer = try gl.createBuffer();
+    defer tris_vertex_buffer.delete();
+
+    var lines_vertex_buffer = try gl.createBuffer();
+    defer lines_vertex_buffer.delete();
 
     const PolygonGroup = struct {
         transform: zlm.Mat4,
@@ -169,8 +172,6 @@ pub fn main() anyerror!void {
 
     var outline_list = std.ArrayList(Vertex).init(gpa);
     defer outline_list.deinit();
-
-    try vao.vertexBuffer(0, vertex_buffer, 0, @sizeOf(Vertex));
 
     var shader_program = try gl.createProgram();
     defer shader_program.delete();
@@ -234,6 +235,8 @@ pub fn main() anyerror!void {
 
     var time: f32 = 0.0;
 
+    var hackvr_dirty = true;
+
     mainLoop: while (true) {
         time += 1.0 / 60.0;
 
@@ -249,7 +252,9 @@ pub fn main() anyerror!void {
         }
 
         // Render scene from HackVR dataset
-        {
+        if (hackvr_dirty) {
+            hackvr_dirty = false;
+
             vertex_list.shrink(0);
             poly_groups.shrink(0);
 
@@ -317,6 +322,9 @@ pub fn main() anyerror!void {
 
                 try poly_groups.append(poly_grp);
             }
+
+            try gl.namedBufferData(tris_vertex_buffer, Vertex, vertex_list.items, .dynamic_draw);
+            try gl.namedBufferData(lines_vertex_buffer, Vertex, outline_list.items, .dynamic_draw);
         }
 
         const mat_proj = zlm.Mat4.createPerspective(1.0, 16.0 / 9.0, 0.1, 10000.0);
@@ -340,8 +348,7 @@ pub fn main() anyerror!void {
             try vao.bind();
             try shader_program.use();
 
-            try gl.namedBufferData(vertex_buffer, Vertex, vertex_list.items, .dynamic_draw);
-
+            try vao.vertexBuffer(0, tris_vertex_buffer, 0, @sizeOf(Vertex));
             for (poly_groups.items) |poly_grp| {
                 const transform = zlm.Mat4.mul(poly_grp.transform, mat_view_proj);
 
@@ -354,7 +361,8 @@ pub fn main() anyerror!void {
 
                 try gl.drawArrays(.triangles, poly_grp.begin_tris, poly_grp.count_tris);
             }
-            try gl.namedBufferData(vertex_buffer, Vertex, outline_list.items, .dynamic_draw);
+
+            try vao.vertexBuffer(0, lines_vertex_buffer, 0, @sizeOf(Vertex));
             for (poly_groups.items) |poly_grp| {
                 const transform = zlm.Mat4.mul(poly_grp.transform, mat_view_proj);
 
