@@ -413,8 +413,8 @@ pub fn main() !void {
                 }
             }
 
-            const pan_rot = zlm.Mat4.createAngleAxis(zlm.Vec3.unitY, camera.rotation.x);
-            const tilt_rot = zlm.Mat4.createAngleAxis(zlm.Vec3.unitX.scale(-1), camera.rotation.y);
+            const pan_rot = zlm.Mat4.createAngleAxis(zlm.Vec3.unitY, camera.rotation.y);
+            const tilt_rot = zlm.Mat4.createAngleAxis(zlm.Vec3.unitX.scale(-1), camera.rotation.x);
 
             move_dir = move_dir.transformDirection(tilt_rot.mul(pan_rot));
 
