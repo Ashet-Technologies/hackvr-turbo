@@ -3,6 +3,7 @@ const std = @import("std");
 const zlm = @import("zlm");
 const hackvr = @import("hackvr");
 const gl = @import("zgl");
+const zig_args = @import("zig-args");
 
 const c = @cImport({
     @cInclude("SDL.h");
@@ -11,7 +12,7 @@ const c = @cImport({
 const SdlError = error{SdlFailure};
 
 fn makeSdlError() SdlError {
-    std.log.err(.SDL, "{c}\n", .{c.SDL_GetError()});
+    std.log.err(.SDL, "{}\n", .{std.mem.span(c.SDL_GetError() orelse unreachable)});
     return error.SdlFailure;
 }
 
@@ -20,12 +21,37 @@ fn sdlCheck(result: c_int) !void {
         return makeSdlError();
 }
 
-const CliOptions = struct {
-    multisampling: ?u7 = null,
+const Resolution = struct {
+    const Self = @This();
+
+    width: u16,
+    height: u16,
+
+    pub fn parse(str: []const u8) !Self {
+        if (std.mem.indexOf(u8, str, "x")) |index| {
+            return Self{
+                .width = try std.fmt.parseInt(u16, str[0..index], 10),
+                .height = try std.fmt.parseInt(u16, str[index + 1 ..], 10),
+            };
+        } else {
+            return error.InvalidFormat;
+        }
+    }
 };
 
-const cli_options = CliOptions{
-    .multisampling = 8,
+const CliOptions = struct {
+    resolution: Resolution = Resolution{
+        .width = 1280,
+        .height = 720,
+    },
+    fullscreen: bool = false,
+    multisampling: ?u7 = null,
+
+    pub const shorthands = .{
+        .f = "fullscreen",
+        .r = "resolution",
+        .m = "multisampling",
+    };
 };
 
 fn parseColor(comptime col: []const u8) zlm.Vec3 {
@@ -79,6 +105,9 @@ pub fn main() !void {
     }
     const gpa = &gpa_backing.allocator;
 
+    var cli = try zig_args.parseForCurrentProcess(CliOptions, gpa);
+    defer cli.deinit();
+
     if (c.SDL_Init(c.SDL_INIT_EVERYTHING) < 0) {
         return makeSdlError();
     }
@@ -88,7 +117,7 @@ pub fn main() !void {
     try sdlCheck(c.SDL_GL_SetAttribute(.SDL_GL_CONTEXT_MINOR_VERSION, 5));
     try sdlCheck(c.SDL_GL_SetAttribute(.SDL_GL_CONTEXT_FLAGS, c.SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG | c.SDL_GL_CONTEXT_DEBUG_FLAG));
 
-    if (cli_options.multisampling) |samples| {
+    if (cli.options.multisampling) |samples| {
         try sdlCheck(c.SDL_GL_SetAttribute(.SDL_GL_MULTISAMPLEBUFFERS, 1));
         try sdlCheck(c.SDL_GL_SetAttribute(.SDL_GL_MULTISAMPLESAMPLES, samples));
     }
@@ -97,9 +126,9 @@ pub fn main() !void {
         "HackVR Turbo",
         c.SDL_WINDOWPOS_CENTERED,
         c.SDL_WINDOWPOS_CENTERED,
-        1280,
-        720,
-        c.SDL_WINDOW_OPENGL,
+        @intCast(c_int, cli.options.resolution.width),
+        @intCast(c_int, cli.options.resolution.height),
+        @intCast(u32, c.SDL_WINDOW_OPENGL | (if (cli.options.fullscreen) c.SDL_WINDOW_FULLSCREEN_DESKTOP else 0)),
     ) orelse return makeSdlError();
     defer c.SDL_DestroyWindow(window);
 
@@ -108,25 +137,25 @@ pub fn main() !void {
 
     try sdlCheck(c.SDL_GL_MakeCurrent(window, context));
 
-    try gl.debugMessageCallback({}, openGlDebugCallback);
+    gl.debugMessageCallback({}, openGlDebugCallback);
 
     var state = hackvr.State.init(std.testing.allocator);
     defer state.deinit();
 
-    var vao = try gl.createVertexArray();
+    var vao = gl.createVertexArray();
     defer vao.delete();
 
-    try vao.enableVertexAttribute(0);
-    try vao.enableVertexAttribute(1);
+    vao.enableVertexAttribute(0);
+    vao.enableVertexAttribute(1);
 
-    try vao.attribFormat(
+    vao.attribFormat(
         0,
         3,
         .float,
         false,
         @byteOffsetOf(Vertex, "position"),
     );
-    try vao.attribFormat(
+    vao.attribFormat(
         1,
         3,
         .float,
@@ -134,16 +163,16 @@ pub fn main() !void {
         @byteOffsetOf(Vertex, "color"),
     );
 
-    try vao.attribBinding(0, 0);
-    try vao.attribBinding(1, 0);
+    vao.attribBinding(0, 0);
+    vao.attribBinding(1, 0);
 
-    var tris_vertex_buffer = try gl.createBuffer();
+    var tris_vertex_buffer = gl.createBuffer();
     defer tris_vertex_buffer.delete();
 
-    var lines_vertex_buffer = try gl.createBuffer();
+    var lines_vertex_buffer = gl.createBuffer();
     defer lines_vertex_buffer.delete();
 
-    var point_vertex_buffer = try gl.createBuffer();
+    var point_vertex_buffer = gl.createBuffer();
     defer point_vertex_buffer.delete();
 
     const PolygonGroup = struct {
@@ -167,26 +196,26 @@ pub fn main() !void {
     var outline_list = std.ArrayList(Vertex).init(gpa);
     defer outline_list.deinit();
 
-    var shader_program = try gl.createProgram();
+    var shader_program = gl.createProgram();
     defer shader_program.delete();
 
     {
-        var vertex_shader = try gl.createShader(.vertex);
+        var vertex_shader = gl.createShader(.vertex);
         defer vertex_shader.delete();
 
-        var fragment_shader = try gl.createShader(.fragment);
+        var fragment_shader = gl.createShader(.fragment);
         defer fragment_shader.delete();
 
-        try vertex_shader.source(1, &[_][]const u8{
+        vertex_shader.source(1, &[_][]const u8{
             @embedFile("./shader/flat.vert"),
         });
 
-        try fragment_shader.source(1, &[_][]const u8{
+        fragment_shader.source(1, &[_][]const u8{
             @embedFile("./shader/flat.frag"),
         });
 
-        try vertex_shader.compile();
-        if ((try vertex_shader.get(.compile_status)) == 0) {
+        vertex_shader.compile();
+        if (vertex_shader.get(.compile_status) == 0) {
             const compile_log = try vertex_shader.getCompileLog(gpa);
             defer gpa.free(compile_log);
 
@@ -194,8 +223,8 @@ pub fn main() !void {
             return;
         }
 
-        try fragment_shader.compile();
-        if ((try fragment_shader.get(.compile_status)) == 0) {
+        fragment_shader.compile();
+        if (fragment_shader.get(.compile_status) == 0) {
             const compile_log = try fragment_shader.getCompileLog(gpa);
             defer gpa.free(compile_log);
 
@@ -203,14 +232,14 @@ pub fn main() !void {
             return;
         }
 
-        try shader_program.attach(vertex_shader);
+        shader_program.attach(vertex_shader);
         defer shader_program.detach(vertex_shader);
 
-        try shader_program.attach(fragment_shader);
+        shader_program.attach(fragment_shader);
         defer shader_program.detach(fragment_shader);
 
-        try shader_program.link();
-        if ((try shader_program.get(.link_status)) == 0) {
+        shader_program.link();
+        if (shader_program.get(.link_status) == 0) {
             const link_log = try shader_program.getCompileLog(gpa);
             defer gpa.free(link_log);
 
@@ -219,19 +248,19 @@ pub fn main() !void {
         }
     }
 
-    const transform_loc = (try shader_program.uniformLocation("uTransform")) orelse {
+    const transform_loc = shader_program.uniformLocation("uTransform") orelse {
         std.log.crit(.Exe, "Failed to query uniform uTransform!\n", .{});
         return;
     };
 
-    const highlighted_loc = (try shader_program.uniformLocation("uHighlighting")) orelse {
+    const highlighted_loc = shader_program.uniformLocation("uHighlighting") orelse {
         std.log.crit(.Exe, "Failed to query uniform uHighlighting!\n", .{});
         return;
     };
 
-    try gl.enable(.depth_test);
-    try gl.depthFunc(.less_or_equal);
-    try gl.pointSize(5.0);
+    gl.enable(.depth_test);
+    gl.depthFunc(.less_or_equal);
+    gl.pointSize(5.0);
 
     var time: f32 = 0.0;
 
@@ -442,8 +471,22 @@ pub fn main() !void {
                 };
 
                 for (group.shapes.items) |*shape| {
-                    if (shape.points.len < 3) {
-                        std.debug.print("count: {}\n", .{shape.points.len});
+                    if (shape.points.len == 0) {
+                        // wat?
+                    } else if (shape.points.len == 1) {
+                        try point_list.append(Vertex{
+                            .position = shape.points[0],
+                            .color = palette[shape.attributes.color % 16],
+                        });
+                    } else if (shape.points.len == 2) {
+                        try outline_list.append(Vertex{
+                            .position = shape.points[0],
+                            .color = palette[shape.attributes.color % 16],
+                        });
+                        try outline_list.append(Vertex{
+                            .position = shape.points[1],
+                            .color = palette[shape.attributes.color % 16],
+                        });
                     } else {
                         // Simple fan-out triangulation.
                         // Not beautiful, but very simple
@@ -599,7 +642,7 @@ pub fn main() !void {
 
                 for (group.shapes.items) |*shape, shape_index| {
                     if (shape.points.len < 3) {
-                        std.debug.print("count: {}\n", .{shape.points.len});
+                        // we can't pick lines or points
                     } else {
                         // Simple fan-out triangulation.
                         // Not beautiful, but very simple
@@ -716,46 +759,46 @@ pub fn main() !void {
             }
         }
 
-        try gl.namedBufferData(tris_vertex_buffer, Vertex, vertex_list.items, .dynamic_draw);
-        try gl.namedBufferData(lines_vertex_buffer, Vertex, outline_list.items, .dynamic_draw);
-        try gl.namedBufferData(point_vertex_buffer, Vertex, point_list.items, .dynamic_draw);
+        gl.namedBufferData(tris_vertex_buffer, Vertex, vertex_list.items, .dynamic_draw);
+        gl.namedBufferData(lines_vertex_buffer, Vertex, outline_list.items, .dynamic_draw);
+        gl.namedBufferData(point_vertex_buffer, Vertex, point_list.items, .dynamic_draw);
 
         // render graphics
         {
-            try gl.clearColor(0.0, 0.0, 0.3, 1.0);
-            try gl.clearDepth(1.0);
-            try gl.clear(.{
+            gl.clearColor(0.0, 0.0, 0.3, 1.0);
+            gl.clearDepth(1.0);
+            gl.clear(.{
                 .color = true,
                 .depth = true,
             });
 
-            try vao.bind();
-            try shader_program.use();
+            vao.bind();
+            shader_program.use();
 
-            try gl.programUniform1f(
+            gl.programUniform1f(
                 shader_program,
                 highlighted_loc,
                 0.0,
             );
 
-            try vao.vertexBuffer(0, tris_vertex_buffer, 0, @sizeOf(Vertex));
+            vao.vertexBuffer(0, tris_vertex_buffer, 0, @sizeOf(Vertex));
             for (poly_groups.items) |poly_grp| {
                 const transform = zlm.Mat4.mul(poly_grp.transform, mat_view_proj);
 
-                try gl.programUniformMatrix4(
+                gl.programUniformMatrix4(
                     shader_program,
                     transform_loc,
                     false,
                     @ptrCast([*]const [4][4]f32, &transform.fields)[0..1],
                 );
 
-                try gl.drawArrays(.triangles, poly_grp.begin_tris, poly_grp.count_tris);
+                gl.drawArrays(.triangles, poly_grp.begin_tris, poly_grp.count_tris);
             }
 
-            try gl.enable(.polygon_offset_line);
-            try gl.polygonOffset(0.0, -16.0);
+            gl.enable(.polygon_offset_line);
+            gl.polygonOffset(0.0, -16.0);
 
-            try vao.vertexBuffer(0, lines_vertex_buffer, 0, @sizeOf(Vertex));
+            vao.vertexBuffer(0, lines_vertex_buffer, 0, @sizeOf(Vertex));
             for (poly_groups.items) |poly_grp| {
                 const transform = zlm.Mat4.mul(poly_grp.transform, mat_view_proj);
 
@@ -764,31 +807,31 @@ pub fn main() !void {
                 else
                     false;
 
-                try gl.programUniform1f(
+                gl.programUniform1f(
                     shader_program,
                     highlighted_loc,
                     if (picked) @as(f32, 1.0) else @as(f32, 0.0),
                 );
 
-                try gl.programUniformMatrix4(
+                gl.programUniformMatrix4(
                     shader_program,
                     transform_loc,
                     false,
                     @ptrCast([*]const [4][4]f32, &transform.fields)[0..1],
                 );
-                try gl.drawArrays(.lines, poly_grp.begin_lines, poly_grp.count_lines);
+                gl.drawArrays(.lines, poly_grp.begin_lines, poly_grp.count_lines);
             }
 
-            try vao.vertexBuffer(0, point_vertex_buffer, 0, @sizeOf(Vertex));
+            vao.vertexBuffer(0, point_vertex_buffer, 0, @sizeOf(Vertex));
             {
                 var transform = mat_view_proj;
-                try gl.programUniformMatrix4(
+                gl.programUniformMatrix4(
                     shader_program,
                     transform_loc,
                     false,
                     @ptrCast([*]const [4][4]f32, &transform.fields)[0..1],
                 );
-                try gl.drawArrays(.points, 0, point_list.items.len);
+                gl.drawArrays(.points, 0, point_list.items.len);
             }
 
             c.SDL_GL_SwapWindow(window);
