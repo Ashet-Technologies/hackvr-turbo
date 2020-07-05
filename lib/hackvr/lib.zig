@@ -94,6 +94,23 @@ pub const State = struct {
         return grp;
     }
 
+    /// Deletes all groups that match `pattern`, returns the numbe of removed groups
+    pub fn deleteGroups(self: *Self, pattern: []const u8) usize {
+        var delete_count: usize = 0;
+        var i: usize = 0;
+        while (i < self.groups.items.len) {
+            if (wildcardEquals(pattern, self.groups.items[i].name)) {
+                var grp = self.groups.swapRemove(i);
+                grp.deinit();
+
+                delete_count += 1;
+            } else {
+                i += 1;
+            }
+        }
+        return delete_count;
+    }
+
     /// Returns an iterator yielding all groups.
     pub fn iterator(self: *Self) GroupIterator {
         return GroupIterator{
@@ -183,6 +200,9 @@ pub fn applyEventToState(state: *State, event: parsing.Event) !void {
             while (iter.next()) |grp| {
                 grp.name = new_name;
             }
+        },
+        .delete_group => |cmd| {
+            _ = state.deleteGroups(cmd.groups);
         },
         else => {
             std.debug.print("Event {} not implemented yet!\n", .{@as(parsing.EventType, event)});

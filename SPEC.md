@@ -85,7 +85,16 @@ Tries to let you output the various things that can be set.`
 ### `[groupspec] quit`
 Closes hackvr only if the id that is doing it is the same as yours.`
 
-### `[groupspec] set`
+### `[groupspec] set [key] [value]`
+
+Sets different properties in the world. Known properties are:
+
+| Property      | Type  | Description         |
+|---------------|-------|---------------------|
+| `global.zoom` | `int` | ???                 |
+| `camera.p.x`  | `int` | Camera X coordinate |
+| `camera.p.y`  | `int` | Camera Y coordinate |
+| `camera.p.z`  | `int` | Camera Z coordinate |
 
 ### `[groupspec] physics`
 

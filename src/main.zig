@@ -63,7 +63,16 @@ const Vertex = extern struct {
     color: zlm.Vec3,
 };
 
-pub fn main() anyerror!void {
+fn getGroupTransform(group: hackvr.Group) zlm.Mat4 {
+    return zlm.Mat4.batchMul(&[_]zlm.Mat4{
+        zlm.Mat4.createAngleAxis(zlm.Vec3.unitZ, zlm.toRadians(group.rotation.z)),
+        zlm.Mat4.createAngleAxis(zlm.Vec3.unitX, zlm.toRadians(group.rotation.x)),
+        zlm.Mat4.createAngleAxis(zlm.Vec3.unitY, zlm.toRadians(group.rotation.y)),
+        zlm.Mat4.createTranslation(group.translation),
+    });
+}
+
+pub fn main() !void {
     var gpa_backing = std.testing.LeakCountAllocator.init(std.heap.c_allocator);
     defer {
         gpa_backing.validate() catch |err| {};
@@ -240,15 +249,15 @@ pub fn main() anyerror!void {
         std.os.O_NONBLOCK | try std.os.fcntl(std.io.getStdIn().handle, std.os.F_GETFL, 0),
     );
 
-    const Camera = struct {
-        position: zlm.Vec3,
-        pan: f32,
-        tilt: f32,
-    };
-    var camera = Camera{
-        .position = zlm.Vec3.zero,
-        .pan = 0,
-        .tilt = 0,
+    const user_name = try std.process.getEnvVarOwned(gpa, "USER");
+    defer gpa.free(user_name);
+
+    var camera = try state.getOrCreateGroup(user_name);
+    camera.translation = zlm.Vec3.zero;
+    camera.rotation = zlm.Vec3{
+        .x = 0,
+        .y = zlm.toRadians(-180.0),
+        .z = 0,
     };
 
     const dt = 1.0 / 60.0;
@@ -294,8 +303,27 @@ pub fn main() anyerror!void {
 
                         .event => |ev| {
                             slice = ev.rest;
-                            try hackvr.applyEventToState(&state, ev.event);
+                            switch (ev.event) {
+                                .set => |cmd| {
+                                    if (std.mem.eql(u8, cmd.key, "camera.p.x")) {
+                                        camera.translation.x = std.fmt.parseFloat(f32, cmd.value) catch camera.translation.x;
+                                    } else if (std.mem.eql(u8, cmd.key, "camera.p.y")) {
+                                        camera.translation.y = std.fmt.parseFloat(f32, cmd.value) catch camera.translation.y;
+                                    } else if (std.mem.eql(u8, cmd.key, "camera.p.z")) {
+                                        camera.translation.z = std.fmt.parseFloat(f32, cmd.value) catch camera.translation.z;
+                                    } else {
+                                        std.debug.print("unknown key for command set: {} {}\n", .{
+                                            cmd.key,
+                                            cmd.value,
+                                        });
+                                    }
+                                },
+                                else => try hackvr.applyEventToState(&state, ev.event),
+                            }
                             hackvr_dirty = true;
+
+                            //  we need to update the camera pointer as it may have changed
+                            camera = try state.getOrCreateGroup(user_name);
                         },
                     }
                 }
@@ -319,8 +347,8 @@ pub fn main() anyerror!void {
                         const motion = &event.motion;
 
                         if ((motion.state & 4) != 0) {
-                            camera.pan -= @intToFloat(f32, motion.xrel) / 150.0;
-                            camera.tilt -= @intToFloat(f32, motion.yrel) / 150.0;
+                            camera.rotation.y -= @intToFloat(f32, motion.xrel) / 150.0;
+                            camera.rotation.x -= @intToFloat(f32, motion.yrel) / 150.0;
                         }
                     },
                     else => {
@@ -361,10 +389,10 @@ pub fn main() anyerror!void {
             } else {
                 // Turning
                 if (keys[c.SDL_SCANCODE_RIGHT] != 0) {
-                    camera.pan -= turnspeed * dt;
+                    camera.rotation.y -= turnspeed * dt;
                 }
                 if (keys[c.SDL_SCANCODE_LEFT] != 0) {
-                    camera.pan += turnspeed * dt;
+                    camera.rotation.y += turnspeed * dt;
                 }
             }
 
@@ -378,19 +406,19 @@ pub fn main() anyerror!void {
             } else {
                 // Tilting
                 if (keys[c.SDL_SCANCODE_PAGEUP] != 0) {
-                    camera.tilt += turnspeed * dt;
+                    camera.rotation.x += turnspeed * dt;
                 }
                 if (keys[c.SDL_SCANCODE_PAGEDOWN] != 0) {
-                    camera.tilt -= turnspeed * dt;
+                    camera.rotation.x -= turnspeed * dt;
                 }
             }
 
-            const pan_rot = zlm.Mat4.createAngleAxis(zlm.Vec3.unitY, camera.pan);
-            const tilt_rot = zlm.Mat4.createAngleAxis(zlm.Vec3.unitX.scale(-1), camera.tilt);
+            const pan_rot = zlm.Mat4.createAngleAxis(zlm.Vec3.unitY, camera.rotation.x);
+            const tilt_rot = zlm.Mat4.createAngleAxis(zlm.Vec3.unitX.scale(-1), camera.rotation.y);
 
             move_dir = move_dir.transformDirection(tilt_rot.mul(pan_rot));
 
-            camera.position = camera.position.add(move_dir.scale(movespeed * dt));
+            camera.translation = camera.translation.add(move_dir.scale(movespeed * dt));
         }
 
         // Render scene from HackVR dataset
@@ -409,10 +437,8 @@ pub fn main() anyerror!void {
                     .count_tris = undefined,
                     .begin_lines = outline_list.items.len,
                     .count_lines = undefined,
-                    .transform = zlm.Mat4.mul(
-                        zlm.Mat4.createAngleAxis(zlm.Vec3.unitY, zlm.toRadians(group.rotation.y)),
-                        zlm.Mat4.createTranslation(group.translation),
-                    ),
+
+                    .transform = getGroupTransform(group.*),
                 };
 
                 for (group.shapes.items) |*shape| {
@@ -425,15 +451,15 @@ pub fn main() anyerror!void {
                         while (i < shape.points.len) {
                             try vertex_list.append(Vertex{
                                 .position = shape.points[0],
-                                .color = palette[shape.attributes.color],
+                                .color = palette[shape.attributes.color % 16],
                             });
                             try vertex_list.append(Vertex{
                                 .position = shape.points[i - 1],
-                                .color = palette[shape.attributes.color],
+                                .color = palette[shape.attributes.color % 16],
                             });
                             try vertex_list.append(Vertex{
                                 .position = shape.points[i],
-                                .color = palette[shape.attributes.color],
+                                .color = palette[shape.attributes.color % 16],
                             });
 
                             i += 1;
@@ -470,11 +496,11 @@ pub fn main() anyerror!void {
 
         const mat_proj = zlm.Mat4.createPerspective(1.0, 16.0 / 9.0, 0.1, 10000.0);
         const mat_view = zlm.Mat4.createLook(
-            camera.position,
+            camera.translation,
             zlm.Vec3{
-                .x = std.math.sin(camera.pan) * std.math.cos(camera.tilt),
-                .y = std.math.sin(camera.tilt),
-                .z = -std.math.cos(camera.pan) * std.math.cos(camera.tilt),
+                .x = std.math.sin(camera.rotation.y) * std.math.cos(camera.rotation.x),
+                .y = std.math.sin(camera.rotation.x),
+                .z = -std.math.cos(camera.rotation.y) * std.math.cos(camera.rotation.x),
             },
             zlm.Vec3.unitY,
         );
@@ -569,10 +595,7 @@ pub fn main() anyerror!void {
             var group_index: usize = 0;
             var groups = state.iterator();
             while (groups.next()) |group| : (group_index += 1) {
-                const transform = zlm.Mat4.mul(
-                    zlm.Mat4.createAngleAxis(zlm.Vec3.unitY, zlm.toRadians(group.rotation.y)),
-                    zlm.Mat4.createTranslation(group.translation),
-                );
+                const transform = getGroupTransform(group.*);
 
                 for (group.shapes.items) |*shape, shape_index| {
                     if (shape.points.len < 3) {

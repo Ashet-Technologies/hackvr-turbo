@@ -73,7 +73,15 @@ pub const Parser = struct {
                 } else if (std.mem.eql(u8, cmd, "quit")) {
                     return Event{ .quit = selector };
                 } else if (std.mem.eql(u8, cmd, "set")) {
-                    return Event{ .set = selector };
+                    if (args.len != 2)
+                        return error.ArgumentMismatch;
+                    return Event{
+                        .set = SetData{
+                            .selector = selector,
+                            .key = args[0],
+                            .value = args[1],
+                        },
+                    };
                 } else if (std.mem.eql(u8, cmd, "physics")) {
                     return Event{ .physics = selector };
                 } else if (std.mem.eql(u8, cmd, "periodic")) {
@@ -441,6 +449,12 @@ pub const PingData = struct {
     ping_target: []const u8,
 };
 
+pub const SetData = struct {
+    selector: Selector,
+    key: []const u8,
+    value: []const u8,
+};
+
 pub const EventType = @TagType(Event);
 pub const Event = union(enum) {
     delete_group: GroupArgSelector,
@@ -452,7 +466,7 @@ pub const Event = union(enum) {
     status: Selector,
     dump: Selector,
     quit: Selector,
-    set: Selector,
+    set: SetData,
     physics: Selector,
     control: GroupArgSelector,
     add_shape: AddShapeData,
@@ -543,9 +557,11 @@ test "parser: cmd quit" {
 }
 
 test "parser: cmd set" {
-    const result = (try Parser.init().parseLine("foobar set")) orelse return error.ExpectedEvent;
+    const result = (try Parser.init().parseLine("foobar set key value")) orelse return error.ExpectedEvent;
     std.testing.expect(result == .set);
-    std.testing.expectEqualStrings("foobar", result.set.groups);
+    std.testing.expectEqualStrings("foobar", result.set.selector.groups);
+    std.testing.expectEqualStrings("key", result.set.key);
+    std.testing.expectEqualStrings("value", result.set.value);
 }
 
 test "parser: cmd physics" {
