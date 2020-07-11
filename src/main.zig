@@ -39,6 +39,104 @@ const Resolution = struct {
     }
 };
 
+const Color = extern struct {
+    const Self = @This();
+
+    pub const black = parse("#FFFFFF") catch unreachable;
+    pub const white = parse("#FFFFFF") catch unreachable;
+    pub const red = parse("#FF0000") catch unreachable;
+    pub const green = parse("#00FF00") catch unreachable;
+    pub const blue = parse("#0000FF") catch unreachable;
+    pub const magenta = parse("#FF00FF") catch unreachable;
+    pub const cyan = parse("#00FFFF") catch unreachable;
+    pub const yellow = parse("#FF00FF") catch unreachable;
+
+    red: f32,
+    green: f32,
+    blue: f32,
+    alpha: f32 = 1.0,
+
+    /// Supported formats:
+    /// - `RGB`
+    /// - `#RGB`
+    /// - `RGBA`
+    /// - `RRGGBB`
+    /// - `#RRGGBB`
+    /// - `RRGGBBAA`
+    /// - `#RRGGBBAA`
+    pub fn parse(col: []const u8) !Self {
+        switch (col.len) {
+            3 => {
+                return Self{
+                    .red = @intToFloat(f32, try std.fmt.parseInt(u8, col[0..1], 16)) / 15.0,
+                    .green = @intToFloat(f32, try std.fmt.parseInt(u8, col[1..2], 16)) / 15.0,
+                    .blue = @intToFloat(f32, try std.fmt.parseInt(u8, col[2..3], 16)) / 15.0,
+                };
+            },
+            4 => {
+                return if (col[0] == '#')
+                    Self{
+                        .red = @intToFloat(f32, try std.fmt.parseInt(u8, col[1..2], 16)) / 15.0,
+                        .green = @intToFloat(f32, try std.fmt.parseInt(u8, col[2..3], 16)) / 15.0,
+                        .blue = @intToFloat(f32, try std.fmt.parseInt(u8, col[3..4], 16)) / 15.0,
+                    }
+                else
+                    Self{
+                        .red = @intToFloat(f32, try std.fmt.parseInt(u8, col[0..1], 16)) / 15.0,
+                        .green = @intToFloat(f32, try std.fmt.parseInt(u8, col[1..2], 16)) / 15.0,
+                        .blue = @intToFloat(f32, try std.fmt.parseInt(u8, col[2..3], 16)) / 15.0,
+                        .alpha = @intToFloat(f32, try std.fmt.parseInt(u8, col[3..4], 16)) / 15.0,
+                    };
+            },
+            5 => {
+                if (col[0] != '#')
+                    return error.InvalidFormat;
+                return Self{
+                    .red = @intToFloat(f32, try std.fmt.parseInt(u8, col[1..2], 16)) / 15.0,
+                    .green = @intToFloat(f32, try std.fmt.parseInt(u8, col[2..3], 16)) / 15.0,
+                    .blue = @intToFloat(f32, try std.fmt.parseInt(u8, col[3..4], 16)) / 15.0,
+                    .alpha = @intToFloat(f32, try std.fmt.parseInt(u8, col[4..5], 16)) / 15.0,
+                };
+            },
+            6 => {
+                return Self{
+                    .red = @intToFloat(f32, try std.fmt.parseInt(u8, col[0..2], 16)) / 255.0,
+                    .green = @intToFloat(f32, try std.fmt.parseInt(u8, col[2..4], 16)) / 255.0,
+                    .blue = @intToFloat(f32, try std.fmt.parseInt(u8, col[4..6], 16)) / 255.0,
+                };
+            },
+            7 => {
+                if (col[0] != '#')
+                    return error.InvalidFormat;
+                return Self{
+                    .red = @intToFloat(f32, try std.fmt.parseInt(u8, col[1..3], 16)) / 255.0,
+                    .green = @intToFloat(f32, try std.fmt.parseInt(u8, col[3..5], 16)) / 255.0,
+                    .blue = @intToFloat(f32, try std.fmt.parseInt(u8, col[5..7], 16)) / 255.0,
+                };
+            },
+            8 => {
+                return Self{
+                    .red = @intToFloat(f32, try std.fmt.parseInt(u8, col[0..2], 16)) / 255.0,
+                    .green = @intToFloat(f32, try std.fmt.parseInt(u8, col[2..4], 16)) / 255.0,
+                    .blue = @intToFloat(f32, try std.fmt.parseInt(u8, col[4..6], 16)) / 255.0,
+                    .alpha = @intToFloat(f32, try std.fmt.parseInt(u8, col[6..8], 16)) / 255.0,
+                };
+            },
+            9 => {
+                if (col[0] != '#')
+                    return error.InvalidFormat;
+                return Self{
+                    .red = @intToFloat(f32, try std.fmt.parseInt(u8, col[1..3], 16)) / 255.0,
+                    .green = @intToFloat(f32, try std.fmt.parseInt(u8, col[3..5], 16)) / 255.0,
+                    .blue = @intToFloat(f32, try std.fmt.parseInt(u8, col[5..7], 16)) / 255.0,
+                    .alpha = @intToFloat(f32, try std.fmt.parseInt(u8, col[7..9], 16)) / 255.0,
+                };
+            },
+            else => return error.InvalidFormat,
+        }
+    }
+};
+
 const CliOptions = struct {
     resolution: Resolution = Resolution{
         .width = 1280,
@@ -46,47 +144,39 @@ const CliOptions = struct {
     },
     fullscreen: bool = false,
     multisampling: ?u7 = null,
+    background: Color = Color.parse("#000020") catch unreachable,
 
     pub const shorthands = .{
         .f = "fullscreen",
         .r = "resolution",
         .m = "multisampling",
+        .b = "background",
     };
 };
 
-fn parseColor(comptime col: []const u8) zlm.Vec3 {
-    std.debug.assert(col.len == 7);
-    std.debug.assert(col[0] == '#');
-    return zlm.Vec3{
-        .x = @intToFloat(f32, std.fmt.parseInt(u8, col[1..3], 16) catch unreachable) / 255.0,
-        .y = @intToFloat(f32, std.fmt.parseInt(u8, col[3..5], 16) catch unreachable) / 255.0,
-        .z = @intToFloat(f32, std.fmt.parseInt(u8, col[5..7], 16) catch unreachable) / 255.0,
-    };
-}
-
 // https://lospec.com/palette-list/dawnbringer-16
-const palette = [_]zlm.Vec3{
-    parseColor("#140c1c"),
-    parseColor("#442434"),
-    parseColor("#30346d"),
-    parseColor("#4e4a4e"),
-    parseColor("#854c30"),
-    parseColor("#346524"),
-    parseColor("#d04648"),
-    parseColor("#757161"),
-    parseColor("#597dce"),
-    parseColor("#d27d2c"),
-    parseColor("#8595a1"),
-    parseColor("#6daa2c"),
-    parseColor("#d2aa99"),
-    parseColor("#6dc2ca"),
-    parseColor("#dad45e"),
-    parseColor("#deeed6"),
+const palette = [_]Color{
+    Color.parse("#140c1c") catch unreachable,
+    Color.parse("#442434") catch unreachable,
+    Color.parse("#30346d") catch unreachable,
+    Color.parse("#4e4a4e") catch unreachable,
+    Color.parse("#854c30") catch unreachable,
+    Color.parse("#346524") catch unreachable,
+    Color.parse("#d04648") catch unreachable,
+    Color.parse("#757161") catch unreachable,
+    Color.parse("#597dce") catch unreachable,
+    Color.parse("#d27d2c") catch unreachable,
+    Color.parse("#8595a1") catch unreachable,
+    Color.parse("#6daa2c") catch unreachable,
+    Color.parse("#d2aa99") catch unreachable,
+    Color.parse("#6dc2ca") catch unreachable,
+    Color.parse("#dad45e") catch unreachable,
+    Color.parse("#deeed6") catch unreachable,
 };
 
 const Vertex = extern struct {
     position: zlm.Vec3,
-    color: zlm.Vec3,
+    color: Color,
 };
 
 fn getGroupTransform(state: hackvr.State, group: hackvr.Group) zlm.Mat4 {
@@ -165,7 +255,7 @@ pub fn main() !void {
     );
     vao.attribFormat(
         1,
-        3,
+        4,
         .float,
         false,
         @byteOffsetOf(Vertex, "color"),
@@ -520,21 +610,21 @@ pub fn main() !void {
                         while (i < shape.points.len) {
                             try outline_list.append(Vertex{
                                 .position = shape.points[i - 1],
-                                .color = zlm.Vec3.one,
+                                .color = Color.white,
                             });
                             try outline_list.append(Vertex{
                                 .position = shape.points[i],
-                                .color = zlm.Vec3.one,
+                                .color = Color.white,
                             });
                             i += 1;
                         }
                         try outline_list.append(Vertex{
                             .position = shape.points[0],
-                            .color = zlm.Vec3.one,
+                            .color = Color.white,
                         });
                         try outline_list.append(Vertex{
                             .position = shape.points[shape.points.len - 1],
-                            .color = zlm.Vec3.one,
+                            .color = Color.white,
                         });
                     }
                 }
@@ -773,7 +863,12 @@ pub fn main() !void {
 
         // render graphics
         {
-            gl.clearColor(0.0, 0.0, 0.3, 1.0);
+            gl.clearColor(
+                cli.options.background.red,
+                cli.options.background.green,
+                cli.options.background.blue,
+                1.0,
+            );
             gl.clearDepth(1.0);
             gl.clear(.{
                 .color = true,
@@ -912,90 +1007,6 @@ fn rayTriangleIntersect(ro: zlm.Vec3, rd: zlm.Vec3, v0: zlm.Vec3, v1: zlm.Vec3, 
     return t;
     // return vec3( t, u, v );
 }
-
-// fn rayTriangleIntersect(ro: zlm.Vec3, rd: zlm.Vec3, v0: zlm.Vec3, v1: zlm.Vec3, v2: zlm.Vec3) ?f32 {
-//     const a = v0.sub(v1);
-//     const b = v2.sub(v1);
-//     const p = v0.sub(ro);
-//     const n = b.cross(a);
-//     const q = p.cross(rd);
-
-//     const idet = 1.0 / rd.dot(n);
-
-//     const u = q.dot(b) * idet;
-//     const v = q.dot(a) * idet;
-//     const t = n.dot(p) * idet;
-
-//     if (t < 0) {
-//         return null;
-//     }
-
-//     if (u < 0 or u > 1 or v < 0 or (u + v) > 1) {
-//         return null;
-//     }
-
-//     return t;
-// }
-
-// fn rayTriangleIntersect(orig: zlm.Vec3, dir: zlm.Vec3, v0: zlm.Vec3, v1: zlm.Vec3, v2: zlm.Vec3) ?f32 {
-//     const kEpsilon = 1e-10;
-
-//     // compute plane's normal
-//     const v0v1 = v1.sub(v0);
-//     const v0v2 = v2.sub(v0);
-//     // no need to normalize
-//     const N = v0v1.cross(v0v2); // N
-//     const area2 = N.length();
-
-//     // Step 1: finding P
-
-//     // check if ray and plane are parallel ?
-//     const NdotRayDirection = N.dot(dir);
-//     if (std.math.absFloat(NdotRayDirection) < kEpsilon) { // almost 0
-//         return null; // they are parallel so they don't intersect !
-//     }
-
-//     // compute d parameter using equation 2
-//     const d = N.dot(v0);
-
-//     // compute t (equation 3)
-//     const t = (N.dot(orig) + d) / NdotRayDirection;
-//     // check if the triangle is in behind the ray
-//     if (t < 0) {
-//         return null; // the triangle is behind
-//     }
-
-//     // compute the intersection point using equation 1
-//     const P = orig.add(dir.scale(t));
-
-//     // Step 2: inside-outside test
-
-//     // edge 0
-//     const edge0 = v1.sub(v0);
-//     const vp0 = P.sub(v0);
-//     const C0 = edge0.cross(vp0); // vector perpendicular to triangle's plane
-//     const side_0 = (N.dot(C0) < 0);
-//     if (side_0)
-//         return null;
-
-//     // edge 1
-//     const edge1 = v2.sub(v1);
-//     const vp1 = P.sub(v1);
-//     const C1 = edge1.cross(vp1);
-//     const side_1 = (N.dot(C1) < 0);
-//     if (side_1)
-//         return null;
-
-//     // edge 2
-//     const edge2 = v0.sub(v2);
-//     const vp2 = P.sub(v2);
-//     const C2 = edge2.cross(vp2);
-//     const side_2 = (N.dot(C2) < 0);
-//     if (side_2)
-//         return null;
-
-//     return t; // this ray hits the triangle
-// }
 
 fn invertMatrix(mat: zlm.Mat4) ?zlm.Mat4 {
     const m = @bitCast([16]f32, mat.fields);
