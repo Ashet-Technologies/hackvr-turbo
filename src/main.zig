@@ -89,13 +89,21 @@ const Vertex = extern struct {
     color: zlm.Vec3,
 };
 
-fn getGroupTransform(group: hackvr.Group) zlm.Mat4 {
-    return zlm.Mat4.batchMul(&[_]zlm.Mat4{
+fn getGroupTransform(state: hackvr.State, group: hackvr.Group) zlm.Mat4 {
+    var transform = zlm.Mat4.batchMul(&[_]zlm.Mat4{
         zlm.Mat4.createAngleAxis(zlm.Vec3.unitZ, zlm.toRadians(group.rotation.z)),
         zlm.Mat4.createAngleAxis(zlm.Vec3.unitX, zlm.toRadians(group.rotation.x)),
         zlm.Mat4.createAngleAxis(zlm.Vec3.unitY, zlm.toRadians(group.rotation.y)),
         zlm.Mat4.createTranslation(group.translation),
     });
+
+    if (group.parent) |parent| {
+        var parent_transform = getGroupTransform(state, state.groups.items[parent]);
+
+        return transform.mul(parent_transform);
+    } else {
+        return transform;
+    }
 }
 
 pub fn main() !void {
@@ -113,8 +121,8 @@ pub fn main() !void {
     }
     defer _ = c.SDL_Quit();
 
-    try sdlCheck(c.SDL_GL_SetAttribute(.SDL_GL_CONTEXT_MAJOR_VERSION, 4));
-    try sdlCheck(c.SDL_GL_SetAttribute(.SDL_GL_CONTEXT_MINOR_VERSION, 5));
+    try sdlCheck(c.SDL_GL_SetAttribute(.SDL_GL_CONTEXT_MAJOR_VERSION, 3));
+    try sdlCheck(c.SDL_GL_SetAttribute(.SDL_GL_CONTEXT_MINOR_VERSION, 3));
     try sdlCheck(c.SDL_GL_SetAttribute(.SDL_GL_CONTEXT_FLAGS, c.SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG | c.SDL_GL_CONTEXT_DEBUG_FLAG));
 
     if (cli.options.multisampling) |samples| {
@@ -467,7 +475,7 @@ pub fn main() !void {
                     .begin_lines = outline_list.items.len,
                     .count_lines = undefined,
 
-                    .transform = getGroupTransform(group.*),
+                    .transform = getGroupTransform(state, group.*),
                 };
 
                 for (group.shapes.items) |*shape| {
@@ -638,7 +646,7 @@ pub fn main() !void {
             var group_index: usize = 0;
             var groups = state.iterator();
             while (groups.next()) |group| : (group_index += 1) {
-                const transform = getGroupTransform(group.*);
+                const transform = getGroupTransform(state, group.*);
 
                 for (group.shapes.items) |*shape, shape_index| {
                     if (shape.points.len < 3) {

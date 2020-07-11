@@ -33,6 +33,8 @@ pub const Group = struct {
     /// flat list of all shapes
     shapes: std.ArrayList(Shape3D),
 
+    /// contains the index of the parent group or `null` when the group is a root node.
+    parent: ?usize,
     translation: zlm.Vec3,
     rotation: zlm.Vec3,
 
@@ -42,6 +44,7 @@ pub const Group = struct {
             .shapes = std.ArrayList(Shape3D).init(allocator),
             .translation = zlm.Vec3.zero,
             .rotation = zlm.Vec3.zero,
+            .parent = null,
         };
     }
 
@@ -92,6 +95,15 @@ pub const State = struct {
         const grp = try self.groups.addOne();
         grp.* = Group.init(self.allocator, name_ptr);
         return grp;
+    }
+
+    pub fn indexOf(self: Self, name: []const u8) ?usize {
+        for (self.groups.items) |grp, i| {
+            if (std.mem.eql(u8, grp.name, name)) {
+                return i;
+            }
+        }
+        return null;
     }
 
     /// Deletes all groups that match `pattern`, returns the numbe of removed groups
@@ -204,6 +216,16 @@ pub fn applyEventToState(state: *State, event: parsing.Event) !void {
         .delete_group => |cmd| {
             _ = state.deleteGroups(cmd.groups);
         },
+        .subsume => |cmd| {
+            if (state.indexOf(cmd.selector.groups)) |parent_index| {
+                var iter = state.findGroups(cmd.groups);
+                while (iter.next()) |grp| {
+                    grp.parent = parent_index;
+                }
+            } else {
+                std.debug.print("Group '{}' does not exist!", .{cmd.selector.groups});
+            }
+        },
         else => {
             std.debug.print("Event {} not implemented yet!\n", .{@as(parsing.EventType, event)});
         },
@@ -300,6 +322,32 @@ test "applyEventToState (add_shape)" {
     std.testing.expectEqual(@as(usize, 0), shp.group);
     std.testing.expectEqualSlices(Vec3D, event.add_shape.polygon, shp.points);
     std.testing.expectEqual(Vec3D{ .x = 0, .y = 0, .z = 0 }, shp.velocity);
+}
+
+test "applyEventToState (subsume)" {
+    var state = State.init(std.testing.allocator);
+    defer state.deinit();
+
+    _ = try state.getOrCreateGroup("child_0"); // → 0
+    _ = try state.getOrCreateGroup("parent"); // → 1
+    _ = try state.getOrCreateGroup("child_1"); // → 2
+
+    var event = parsing.Event{
+        .subsume = parsing.GroupArgSelector{
+            .selector = parsing.Selector{ .groups = "parent" },
+            .groups = "child_*",
+        },
+    };
+
+    try applyEventToState(&state, event);
+
+    const grp0 = try state.getOrCreateGroup("child_0");
+    const grp1 = try state.getOrCreateGroup("parent");
+    const grp2 = try state.getOrCreateGroup("child_1");
+
+    std.testing.expectEqual(@as(?usize, 1), grp0.parent);
+    std.testing.expectEqual(@as(?usize, null), grp1.parent);
+    std.testing.expectEqual(@as(?usize, 1), grp2.parent);
 }
 
 test "Update state with file" {

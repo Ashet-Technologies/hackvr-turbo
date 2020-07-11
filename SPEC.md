@@ -101,14 +101,21 @@ Sets different properties in the world. Known properties are:
 ### `[groupspec] control grou*`
 > Globbing this group could have fun effects
 
-### `[groupspec] addshape color N x1 y1 z1 ... xN yN zN`
+### `[group] addshape [color] [N] [x1] [y1] [z1] … [xN] [yN] [zN]`
+Adds a new polygon to `[group]`. It uses the color from palette index `[color]`. The polygon has `[N]` vertices with coordinates (`[x1]`, `[y1]`, `[z1]`) to (`[xN]`, `[yN]`, `[zN]`).
 
 ### `[groupspec] export grou*`
 
 ### `[groupspec] ping any-string-without-spaces`
 
-d
+
 ### `[groupspec] rotate [+]x [+]y [+]z`
+Rotates all groups in `[groupspec]`. The rotation is either applied absolute (no `+` prefix) or relative (with `+` prefix)
+
+Rotating 5 degrees to the right:
+```
+rotate +0 +-5 +0
+```
 
 ### `[groupspec] periodic`
 Flushes out locally-cached movement and rotation
@@ -119,6 +126,9 @@ Applies the current group transform to all contained vertices in the selected gr
 ### `[groupspec] move [+]x [+]y [+]z`
 
 ### `[groupspec] move forward|backward|up|down|left|right`
+
+### `[parent] subsume [child]`
+This command will make `[child]` a child of `[parent]`. Every translation/rotation of `[child]` will be relative to `[parent]`
 
 ## Output Commands
 

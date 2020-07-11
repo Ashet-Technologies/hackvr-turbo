@@ -115,6 +115,15 @@ pub const Parser = struct {
                             .groups = args[0],
                         },
                     };
+                } else if (std.mem.eql(u8, cmd, "subsume")) {
+                    if (args.len != 1)
+                        return error.ArgumentMismatch;
+                    return Event{
+                        .subsume = GroupArgSelector{
+                            .selector = selector,
+                            .groups = args[0],
+                        },
+                    };
                 } else if (std.mem.eql(u8, cmd, "renamegroup")) {
                     if (args.len != 2)
                         return error.ArgumentMismatch;
@@ -477,6 +486,7 @@ pub const Event = union(enum) {
     periodic: Selector,
     flatten: Selector,
     move: MoveData,
+    subsume: GroupArgSelector,
 };
 
 test "parser: invalid encoding" {
@@ -791,4 +801,12 @@ test "parser: whole file" {
             },
         }
     }
+}
+
+test "parser: subsume" {
+    const result = (try Parser.init().parseLine("parent subsume child")) orelse return error.ExpectedEvent;
+
+    std.testing.expect(result == .subsume);
+    std.testing.expectEqualStrings("parent", result.subsume.selector.groups);
+    std.testing.expectEqualStrings("child", result.subsume.groups);
 }
