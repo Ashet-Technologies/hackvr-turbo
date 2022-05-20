@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const zlm = @import("zlm");
 const hackvr = @import("hackvr");
@@ -12,7 +13,7 @@ const c = @cImport({
 const SdlError = error{SdlFailure};
 
 fn makeSdlError() SdlError {
-    std.log.err(.SDL, "{}\n", .{std.mem.span(c.SDL_GetError() orelse unreachable)});
+    std.log.err("{s}", .{std.mem.sliceTo(c.SDL_GetError() orelse unreachable, 0)});
     return error.SdlFailure;
 }
 
@@ -196,14 +197,12 @@ fn getGroupTransform(state: hackvr.State, group: hackvr.Group) zlm.Mat4 {
     }
 }
 
-pub fn main() !void {
-    var gpa_backing = std.testing.LeakCountAllocator.init(std.heap.c_allocator);
-    defer {
-        gpa_backing.validate() catch |err| {};
-    }
-    const gpa = &gpa_backing.allocator;
+pub fn main() !u8 {
+    var gpa_backing = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_backing.deinit();
+    const gpa = gpa_backing.allocator();
 
-    var cli = try zig_args.parseForCurrentProcess(CliOptions, gpa);
+    var cli = zig_args.parseForCurrentProcess(CliOptions, gpa, .print) catch return 1;
     defer cli.deinit();
 
     if (c.SDL_Init(c.SDL_INIT_EVERYTHING) < 0) {
@@ -211,13 +210,13 @@ pub fn main() !void {
     }
     defer _ = c.SDL_Quit();
 
-    try sdlCheck(c.SDL_GL_SetAttribute(.SDL_GL_CONTEXT_MAJOR_VERSION, 3));
-    try sdlCheck(c.SDL_GL_SetAttribute(.SDL_GL_CONTEXT_MINOR_VERSION, 3));
-    try sdlCheck(c.SDL_GL_SetAttribute(.SDL_GL_CONTEXT_FLAGS, c.SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG | c.SDL_GL_CONTEXT_DEBUG_FLAG));
+    try sdlCheck(c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_MAJOR_VERSION, 3));
+    try sdlCheck(c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_MINOR_VERSION, 3));
+    try sdlCheck(c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_FLAGS, c.SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG | c.SDL_GL_CONTEXT_DEBUG_FLAG));
 
     if (cli.options.multisampling) |samples| {
-        try sdlCheck(c.SDL_GL_SetAttribute(.SDL_GL_MULTISAMPLEBUFFERS, 1));
-        try sdlCheck(c.SDL_GL_SetAttribute(.SDL_GL_MULTISAMPLESAMPLES, samples));
+        try sdlCheck(c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLEBUFFERS, 1));
+        try sdlCheck(c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLESAMPLES, samples));
     }
 
     var window = c.SDL_CreateWindow(
@@ -237,7 +236,7 @@ pub fn main() !void {
 
     gl.debugMessageCallback({}, openGlDebugCallback);
 
-    var state = hackvr.State.init(std.testing.allocator);
+    var state = hackvr.State.init(gpa);
     defer state.deinit();
 
     var vao = gl.createVertexArray();
@@ -251,14 +250,14 @@ pub fn main() !void {
         3,
         .float,
         false,
-        @byteOffsetOf(Vertex, "position"),
+        @offsetOf(Vertex, "position"),
     );
     vao.attribFormat(
         1,
         4,
         .float,
         false,
-        @byteOffsetOf(Vertex, "color"),
+        @offsetOf(Vertex, "color"),
     );
 
     vao.attribBinding(0, 0);
@@ -317,8 +316,8 @@ pub fn main() !void {
             const compile_log = try vertex_shader.getCompileLog(gpa);
             defer gpa.free(compile_log);
 
-            std.debug.print("failed to compile vertex shader:\n{}\n", .{compile_log});
-            return;
+            std.debug.print("failed to compile vertex shader:\n{s}", .{compile_log});
+            return 1;
         }
 
         fragment_shader.compile();
@@ -326,8 +325,8 @@ pub fn main() !void {
             const compile_log = try fragment_shader.getCompileLog(gpa);
             defer gpa.free(compile_log);
 
-            std.debug.print("failed to compile fragment shader:\n{}\n", .{compile_log});
-            return;
+            std.debug.print("failed to compile fragment shader:\n{s}", .{compile_log});
+            return 1;
         }
 
         shader_program.attach(vertex_shader);
@@ -341,19 +340,19 @@ pub fn main() !void {
             const link_log = try shader_program.getCompileLog(gpa);
             defer gpa.free(link_log);
 
-            std.debug.print("failed to compile fragment shader:\n{}\n", .{link_log});
-            return;
+            std.log.err("failed to compile fragment shader:\n{s}", .{link_log});
+            return 1;
         }
     }
 
     const transform_loc = shader_program.uniformLocation("uTransform") orelse {
-        std.log.crit(.Exe, "Failed to query uniform uTransform!\n", .{});
-        return;
+        std.log.err("Failed to query uniform uTransform!", .{});
+        return 1;
     };
 
     const highlighted_loc = shader_program.uniformLocation("uHighlighting") orelse {
-        std.log.crit(.Exe, "Failed to query uniform uHighlighting!\n", .{});
-        return;
+        std.log.err("Failed to query uniform uHighlighting!", .{});
+        return 1;
     };
 
     gl.enable(.depth_test);
@@ -372,8 +371,8 @@ pub fn main() !void {
 
     _ = try std.os.fcntl(
         std.io.getStdIn().handle,
-        std.os.F_SETFL,
-        std.os.O_NONBLOCK | try std.os.fcntl(std.io.getStdIn().handle, std.os.F_GETFL, 0),
+        std.os.F.SETFL,
+        std.os.O.NONBLOCK | try std.os.fcntl(std.io.getStdIn().handle, std.os.F.GETFL, 0),
     );
 
     const user_name = try std.process.getEnvVarOwned(gpa, "USER");
@@ -390,7 +389,7 @@ pub fn main() !void {
     const dt = 1.0 / 60.0;
 
     mainLoop: while (true) : (time += dt) {
-        point_list.shrink(0);
+        point_list.shrinkRetainingCapacity(0);
 
         // process HackVR events
         if (try isDataOnStdInAvailable()) {
@@ -417,11 +416,11 @@ pub fn main() !void {
 
                         // should never be reached as the test.hackvr file is correct
                         .parse_error => |err| {
-                            try stdout.print("# Error while parsing line: {}\n# '{}'\n", .{
+                            try stdout.print("# Error while parsing line: {}\n# '{s}'\n", .{
                                 err.error_type,
                                 err.source,
                             });
-                            try stderr.print("# Error while parsing line: {}\n# '{}'\n", .{
+                            try stderr.print("# Error while parsing line: {}\n# '{s}'\n", .{
                                 err.error_type,
                                 err.source,
                             });
@@ -439,7 +438,7 @@ pub fn main() !void {
                                     } else if (std.mem.eql(u8, cmd.key, "camera.p.z")) {
                                         camera.translation.z = std.fmt.parseFloat(f32, cmd.value) catch camera.translation.z;
                                     } else {
-                                        std.debug.print("unknown key for command set: {} {}\n", .{
+                                        std.debug.print("unknown key for command set: {s} {s}\n", .{
                                             cmd.key,
                                             cmd.value,
                                         });
@@ -552,8 +551,8 @@ pub fn main() !void {
         if (hackvr_dirty or true) {
             hackvr_dirty = false;
 
-            vertex_list.shrink(0);
-            poly_groups.shrink(0);
+            vertex_list.shrinkRetainingCapacity(0);
+            poly_groups.shrinkRetainingCapacity(0);
 
             var group_index: usize = 0;
             var groups = state.iterator();
@@ -816,7 +815,7 @@ pub fn main() !void {
             //     }
             // }
 
-            const size = 0.1;
+            // const size = 0.1;
 
             // if (result != null) {
             //     try point_list.append(Vertex{
@@ -850,7 +849,7 @@ pub fn main() !void {
 
         if (signal_picked_shape) {
             if (picked_shape) |indices| {
-                try stdout.print("{} action {}\n", .{
+                try stdout.print("{s} action {s}\n", .{
                     "USER",
                     indices.group.name,
                 });
@@ -941,6 +940,7 @@ pub fn main() !void {
             c.SDL_Delay(10);
         }
     }
+    return 0;
 }
 
 fn openGlDebugCallback(
@@ -950,34 +950,34 @@ fn openGlDebugCallback(
     severity: gl.DebugSeverity,
     message: []const u8,
 ) void {
-    const msg_fmt = "[{}/{}] {}\n";
+    _ = id;
+    const msg_fmt = "[{s}/{s}] {s}";
     const msg_arg = .{ @tagName(source), @tagName(msg_type), message };
 
     switch (severity) {
-        .high => std.log.crit(.OpenGL, msg_fmt, msg_arg),
-        .medium => std.log.err(.OpenGL, msg_fmt, msg_arg),
-        .low => std.log.warn(.OpenGL, msg_fmt, msg_arg),
-        .notification => std.log.notice(.OpenGL, msg_fmt, msg_arg),
-        else => std.log.crit(.OpenGL, msg_fmt, msg_arg),
+        .high => std.log.err(msg_fmt, msg_arg),
+        .medium => std.log.warn(msg_fmt, msg_arg),
+        .low => std.log.warn(msg_fmt, msg_arg),
+        .notification => std.log.info(msg_fmt, msg_arg),
     }
 }
 
 fn isDataOnStdInAvailable() !bool {
     const stdin = std.io.getStdIn();
-    if (std.builtin.os.tag == .linux) {
+    if (builtin.os.tag == .linux) {
         var fds = [1]std.os.pollfd{
             .{
                 .fd = stdin.handle,
-                .events = std.os.POLLIN,
+                .events = std.os.POLL.IN,
                 .revents = 0,
             },
         };
         _ = try std.os.poll(&fds, 0);
-        if ((fds[0].revents & std.os.POLLIN) != 0) {
+        if ((fds[0].revents & std.os.POLL.IN) != 0) {
             return true;
         }
     }
-    if (std.builtin.os.tag == .windows) {
+    if (builtin.os.tag == .windows) {
         std.os.windows.WaitForSingleObject(stdin.handle, 0) catch |err| switch (err) {
             error.WaitTimeOut => return false,
             else => return err,

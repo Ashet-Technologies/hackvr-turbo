@@ -2,8 +2,6 @@ const std = @import("std");
 
 const hvr = @import("lib.zig");
 
-const FixedList = @import("fixed-list").FixedList;
-
 /// A push-event based parser for HackVR input.
 /// Parses hackvr text into serialized, preparsed commands.
 /// It's not interactive and can eat any amount of data.
@@ -27,7 +25,7 @@ pub const Parser = struct {
 
     fn parseLine(self: *Parser, line: []const u8) !?Event {
         // max number of slices separated by a
-        var items = FixedList([]const u8, 512).init();
+        var items = std.BoundedArray([]const u8, 512){};
 
         {
             var current_start: usize = 0;
@@ -48,7 +46,7 @@ pub const Parser = struct {
             }
         }
 
-        switch (items.count) {
+        switch (items.len) {
             0 => return null,
             1 => {
                 if (std.mem.eql(u8, "help", items.buffer[0])) {
@@ -64,7 +62,7 @@ pub const Parser = struct {
                     .groups = items.buffer[0],
                 };
                 const cmd = items.buffer[1];
-                const args = items.span()[2..];
+                const args = items.slice()[2..];
 
                 if (std.mem.eql(u8, cmd, "status")) {
                     return Event{ .status = selector };
@@ -438,7 +436,7 @@ pub const AbsRelVectorData = struct {
 };
 
 pub const MoveData = struct {
-    const Type = @TagType(Direction);
+    const Type = std.meta.Tag(Direction);
     const Direction = union(enum) {
         forward,
         backward,
@@ -464,7 +462,7 @@ pub const SetData = struct {
     value: []const u8,
 };
 
-pub const EventType = @TagType(Event);
+pub const EventType = std.meta.Tag(Event);
 pub const Event = union(enum) {
     delete_group: GroupArgSelector,
     assimilate: GroupArgSelector,
@@ -493,7 +491,7 @@ test "parser: invalid encoding" {
     var parser = Parser.init();
 
     _ = parser.push("\xFF\n") catch |err| {
-        std.testing.expect(err == error.InvalidEncoding);
+        try std.testing.expect(err == error.InvalidEncoding);
         return;
     };
     unreachable;
@@ -503,36 +501,36 @@ test "parser: empty" {
     var parser = Parser.init();
 
     const result = try parser.push("");
-    std.testing.expect(result == .needs_data);
+    try std.testing.expect(result == .needs_data);
 }
 
 test "parser: whitespace lines" {
     var parser = Parser.init();
 
     const result = try parser.push("\n   \n\n  \n \n \n\n\n    \n");
-    std.testing.expect(result == .needs_data);
+    try std.testing.expect(result == .needs_data);
 }
 
 test "parser: ParseResult.rest/error" {
     var parser = Parser.init();
 
     const result = try parser.push("a\nb");
-    std.testing.expect(result == .parse_error);
-    std.testing.expectEqualStrings("b", result.parse_error.rest);
-    std.testing.expect(result.parse_error.error_type == .unknown_command);
+    try std.testing.expect(result == .parse_error);
+    try std.testing.expectEqualStrings("b", result.parse_error.rest);
+    try std.testing.expect(result.parse_error.error_type == .unknown_command);
 }
 
 test "parser: ParseResult.rest/event" {
     var parser = Parser.init();
 
     const result = try parser.push("help\nb");
-    std.testing.expect(result == .event);
-    std.testing.expectEqualStrings("b", result.event.rest);
+    try std.testing.expect(result == .event);
+    try std.testing.expectEqualStrings("b", result.event.rest);
 }
 
 test "parser: parse line" {
     _ = Parser.init().parseLine("  a bb cccc ") catch |err| {
-        std.testing.expect(err == error.UnknownCommand);
+        try std.testing.expect(err == error.UnknownCommand);
         return;
     };
     unreachable;
@@ -540,104 +538,104 @@ test "parser: parse line" {
 
 test "parser: cmd help" {
     const result = (try Parser.init().parseLine("help")) orelse return error.ExpectedEvent;
-    std.testing.expect(result == .help);
+    try std.testing.expect(result == .help);
 }
 
 test "parser: cmd version" {
     const result = (try Parser.init().parseLine("version")) orelse return error.ExpectedEvent;
-    std.testing.expect(result == .version);
+    try std.testing.expect(result == .version);
 }
 
 test "parser: cmd status" {
     const result = (try Parser.init().parseLine("foobar status")) orelse return error.ExpectedEvent;
-    std.testing.expect(result == .status);
-    std.testing.expectEqualStrings("foobar", result.status.groups);
+    try std.testing.expect(result == .status);
+    try std.testing.expectEqualStrings("foobar", result.status.groups);
 }
 
 test "parser: cmd dump" {
     const result = (try Parser.init().parseLine("foobar dump")) orelse return error.ExpectedEvent;
-    std.testing.expect(result == .dump);
-    std.testing.expectEqualStrings("foobar", result.dump.groups);
+    try std.testing.expect(result == .dump);
+    try std.testing.expectEqualStrings("foobar", result.dump.groups);
 }
 
 test "parser: cmd quit" {
     const result = (try Parser.init().parseLine("foobar quit")) orelse return error.ExpectedEvent;
-    std.testing.expect(result == .quit);
-    std.testing.expectEqualStrings("foobar", result.quit.groups);
+    try std.testing.expect(result == .quit);
+    try std.testing.expectEqualStrings("foobar", result.quit.groups);
 }
 
 test "parser: cmd set" {
     const result = (try Parser.init().parseLine("foobar set key value")) orelse return error.ExpectedEvent;
-    std.testing.expect(result == .set);
-    std.testing.expectEqualStrings("foobar", result.set.selector.groups);
-    std.testing.expectEqualStrings("key", result.set.key);
-    std.testing.expectEqualStrings("value", result.set.value);
+    try std.testing.expect(result == .set);
+    try std.testing.expectEqualStrings("foobar", result.set.selector.groups);
+    try std.testing.expectEqualStrings("key", result.set.key);
+    try std.testing.expectEqualStrings("value", result.set.value);
 }
 
 test "parser: cmd physics" {
     const result = (try Parser.init().parseLine("foobar physics")) orelse return error.ExpectedEvent;
-    std.testing.expect(result == .physics);
-    std.testing.expectEqualStrings("foobar", result.physics.groups);
+    try std.testing.expect(result == .physics);
+    try std.testing.expectEqualStrings("foobar", result.physics.groups);
 }
 
 test "parser: cmd periodic" {
     const result = (try Parser.init().parseLine("foobar periodic")) orelse return error.ExpectedEvent;
-    std.testing.expect(result == .periodic);
-    std.testing.expectEqualStrings("foobar", result.periodic.groups);
+    try std.testing.expect(result == .periodic);
+    try std.testing.expectEqualStrings("foobar", result.periodic.groups);
 }
 
 test "parser: cmd flatten" {
     const result = (try Parser.init().parseLine("foobar flatten")) orelse return error.ExpectedEvent;
-    std.testing.expect(result == .flatten);
-    std.testing.expectEqualStrings("foobar", result.flatten.groups);
+    try std.testing.expect(result == .flatten);
+    try std.testing.expectEqualStrings("foobar", result.flatten.groups);
 }
 
 test "parser: cmd deleteallexcept" {
     const result = (try Parser.init().parseLine("foobar deleteallexcept groupsel")) orelse return error.ExpectedEvent;
 
-    std.testing.expect(result == .delete_all_except);
-    std.testing.expectEqualStrings("foobar", result.delete_all_except.selector.groups);
-    std.testing.expectEqualStrings("groupsel", result.delete_all_except.groups);
+    try std.testing.expect(result == .delete_all_except);
+    try std.testing.expectEqualStrings("foobar", result.delete_all_except.selector.groups);
+    try std.testing.expectEqualStrings("groupsel", result.delete_all_except.groups);
 }
 
 test "parser: cmd delete_group" {
     const result = (try Parser.init().parseLine("foobar deletegroup groupsel")) orelse return error.ExpectedEvent;
 
-    std.testing.expect(result == .delete_group);
-    std.testing.expectEqualStrings("foobar", result.delete_group.selector.groups);
-    std.testing.expectEqualStrings("groupsel", result.delete_group.groups);
+    try std.testing.expect(result == .delete_group);
+    try std.testing.expectEqualStrings("foobar", result.delete_group.selector.groups);
+    try std.testing.expectEqualStrings("groupsel", result.delete_group.groups);
 }
 
 test "parser: cmd delete_group" {
     const result = (try Parser.init().parseLine("foobar renamegroup foobar groupsel")) orelse return error.ExpectedEvent;
 
-    std.testing.expect(result == .rename_group);
-    std.testing.expectEqualStrings("foobar", result.rename_group.selector.groups);
-    std.testing.expectEqualStrings("groupsel", result.rename_group.groups);
+    try std.testing.expect(result == .rename_group);
+    try std.testing.expectEqualStrings("foobar", result.rename_group.selector.groups);
+    try std.testing.expectEqualStrings("groupsel", result.rename_group.groups);
 }
 
 test "parser: cmd delete_group" {
     const result = (try Parser.init().parseLine("foobar assimilate groupsel")) orelse return error.ExpectedEvent;
 
-    std.testing.expect(result == .assimilate);
-    std.testing.expectEqualStrings("foobar", result.assimilate.selector.groups);
-    std.testing.expectEqualStrings("groupsel", result.assimilate.groups);
+    try std.testing.expect(result == .assimilate);
+    try std.testing.expectEqualStrings("foobar", result.assimilate.selector.groups);
+    try std.testing.expectEqualStrings("groupsel", result.assimilate.groups);
 }
 
 test "parser: cmd control" {
     const result = (try Parser.init().parseLine("foobar control groupsel")) orelse return error.ExpectedEvent;
 
-    std.testing.expect(result == .control);
-    std.testing.expectEqualStrings("foobar", result.control.selector.groups);
-    std.testing.expectEqualStrings("groupsel", result.control.groups);
+    try std.testing.expect(result == .control);
+    try std.testing.expectEqualStrings("foobar", result.control.selector.groups);
+    try std.testing.expectEqualStrings("groupsel", result.control.groups);
 }
 
 test "parser: cmd export" {
     const result = (try Parser.init().parseLine("foobar export groupsel")) orelse return error.ExpectedEvent;
 
-    std.testing.expect(result == .@"export");
-    std.testing.expectEqualStrings("foobar", result.@"export".selector.groups);
-    std.testing.expectEqualStrings("groupsel", result.@"export".groups);
+    try std.testing.expect(result == .@"export");
+    try std.testing.expectEqualStrings("foobar", result.@"export".selector.groups);
+    try std.testing.expectEqualStrings("groupsel", result.@"export".groups);
 }
 
 test "parser: cmd addshape" {
@@ -646,10 +644,10 @@ test "parser: cmd addshape" {
     {
         const result = (try parser.parseLine("foobar addshape 3 0")) orelse return error.ExpectedEvent;
 
-        std.testing.expect(result == .add_shape);
-        std.testing.expectEqualStrings("foobar", result.add_shape.selector.groups);
-        std.testing.expectEqual(@as(u8, 3), result.add_shape.color);
-        std.testing.expectEqualSlices(
+        try std.testing.expect(result == .add_shape);
+        try std.testing.expectEqualStrings("foobar", result.add_shape.selector.groups);
+        try std.testing.expectEqual(@as(u8, 3), result.add_shape.color);
+        try std.testing.expectEqualSlices(
             hvr.Vec3D,
             &[_]hvr.Vec3D{},
             result.add_shape.polygon,
@@ -659,10 +657,10 @@ test "parser: cmd addshape" {
     {
         const result = (try parser.parseLine("foobar addshape 3 1 1.5 2.5 3.5")) orelse return error.ExpectedEvent;
 
-        std.testing.expect(result == .add_shape);
-        std.testing.expectEqualStrings("foobar", result.add_shape.selector.groups);
-        std.testing.expectEqual(@as(u8, 3), result.add_shape.color);
-        std.testing.expectEqualSlices(
+        try std.testing.expect(result == .add_shape);
+        try std.testing.expectEqualStrings("foobar", result.add_shape.selector.groups);
+        try std.testing.expectEqual(@as(u8, 3), result.add_shape.color);
+        try std.testing.expectEqualSlices(
             hvr.Vec3D,
             &[_]hvr.Vec3D{
                 .{ .x = 1.5, .y = 2.5, .z = 3.5 },
@@ -674,10 +672,10 @@ test "parser: cmd addshape" {
     {
         const result = (try parser.parseLine("foobar addshape 3 2 1.5 2.5 3.5 7 8 132213.3")) orelse return error.ExpectedEvent;
 
-        std.testing.expect(result == .add_shape);
-        std.testing.expectEqualStrings("foobar", result.add_shape.selector.groups);
-        std.testing.expectEqual(@as(u8, 3), result.add_shape.color);
-        std.testing.expectEqualSlices(
+        try std.testing.expect(result == .add_shape);
+        try std.testing.expectEqualStrings("foobar", result.add_shape.selector.groups);
+        try std.testing.expectEqual(@as(u8, 3), result.add_shape.color);
+        try std.testing.expectEqualSlices(
             hvr.Vec3D,
             &[_]hvr.Vec3D{
                 .{ .x = 1.5, .y = 2.5, .z = 3.5 },
@@ -691,25 +689,25 @@ test "parser: cmd addshape" {
 test "parser: cmd ping" {
     const result = (try Parser.init().parseLine("foobar ping long.text.without.spaces")) orelse return error.ExpectedEvent;
 
-    std.testing.expect(result == .ping);
-    std.testing.expectEqualStrings("foobar", result.ping.selector.groups);
-    std.testing.expectEqualStrings("long.text.without.spaces", result.ping.ping_target);
+    try std.testing.expect(result == .ping);
+    try std.testing.expectEqualStrings("foobar", result.ping.selector.groups);
+    try std.testing.expectEqualStrings("long.text.without.spaces", result.ping.ping_target);
 }
 
 test "parser: cmd scale" {
     const result = (try Parser.init().parseLine("foobar scale 1.4 -2.3 1.8")) orelse return error.ExpectedEvent;
 
-    std.testing.expect(result == .scale);
-    std.testing.expectEqualStrings("foobar", result.scale.selector.groups);
-    std.testing.expectEqual(hvr.Vec3D{ .x = 1.4, .y = -2.3, .z = 1.8 }, result.scale.scale);
+    try std.testing.expect(result == .scale);
+    try std.testing.expectEqualStrings("foobar", result.scale.selector.groups);
+    try std.testing.expectEqual(hvr.Vec3D{ .x = 1.4, .y = -2.3, .z = 1.8 }, result.scale.scale);
 }
 
 test "parser: cmd rotate" {
     const result = (try Parser.init().parseLine("foobar rotate +1.4 -2.25 +-1.8")) orelse return error.ExpectedEvent;
 
-    std.testing.expect(result == .rotate);
-    std.testing.expectEqualStrings("foobar", result.rotate.selector.groups);
-    std.testing.expectEqual(AbsRelVector{
+    try std.testing.expect(result == .rotate);
+    try std.testing.expectEqualStrings("foobar", result.rotate.selector.groups);
+    try std.testing.expectEqual(AbsRelVector{
         .x = AbsRel{ .relative = 1.4 },
         .y = AbsRel{ .absolute = -2.25 },
         .z = AbsRel{ .relative = -1.8 },
@@ -722,10 +720,10 @@ test "parser: cmd move" {
     {
         const result = (try parser.parseLine("foobar move +1.4 -2.3 +-1.8")) orelse return error.ExpectedEvent;
 
-        std.testing.expect(result == .move);
-        std.testing.expectEqualStrings("foobar", result.move.selector.groups);
-        std.testing.expectEqual(MoveData.Type.offset, result.move.direction);
-        std.testing.expectEqual(AbsRelVector{
+        try std.testing.expect(result == .move);
+        try std.testing.expectEqualStrings("foobar", result.move.selector.groups);
+        try std.testing.expectEqual(MoveData.Type.offset, result.move.direction);
+        try std.testing.expectEqual(AbsRelVector{
             .x = AbsRel{ .relative = 1.4 },
             .y = AbsRel{ .absolute = -2.3 },
             .z = AbsRel{ .relative = -1.8 },
@@ -735,49 +733,49 @@ test "parser: cmd move" {
     {
         const result = (try parser.parseLine("foobar move forward")) orelse return error.ExpectedEvent;
 
-        std.testing.expect(result == .move);
-        std.testing.expectEqualStrings("foobar", result.move.selector.groups);
-        std.testing.expectEqual(MoveData.Type.forward, result.move.direction);
+        try std.testing.expect(result == .move);
+        try std.testing.expectEqualStrings("foobar", result.move.selector.groups);
+        try std.testing.expectEqual(MoveData.Type.forward, result.move.direction);
     }
 
     {
         const result = (try parser.parseLine("foobar move backward")) orelse return error.ExpectedEvent;
 
-        std.testing.expect(result == .move);
-        std.testing.expectEqualStrings("foobar", result.move.selector.groups);
-        std.testing.expectEqual(MoveData.Type.backward, result.move.direction);
+        try std.testing.expect(result == .move);
+        try std.testing.expectEqualStrings("foobar", result.move.selector.groups);
+        try std.testing.expectEqual(MoveData.Type.backward, result.move.direction);
     }
 
     {
         const result = (try parser.parseLine("foobar move right")) orelse return error.ExpectedEvent;
 
-        std.testing.expect(result == .move);
-        std.testing.expectEqualStrings("foobar", result.move.selector.groups);
-        std.testing.expectEqual(MoveData.Type.right, result.move.direction);
+        try std.testing.expect(result == .move);
+        try std.testing.expectEqualStrings("foobar", result.move.selector.groups);
+        try std.testing.expectEqual(MoveData.Type.right, result.move.direction);
     }
 
     {
         const result = (try parser.parseLine("foobar move left")) orelse return error.ExpectedEvent;
 
-        std.testing.expect(result == .move);
-        std.testing.expectEqualStrings("foobar", result.move.selector.groups);
-        std.testing.expectEqual(MoveData.Type.left, result.move.direction);
+        try std.testing.expect(result == .move);
+        try std.testing.expectEqualStrings("foobar", result.move.selector.groups);
+        try std.testing.expectEqual(MoveData.Type.left, result.move.direction);
     }
 
     {
         const result = (try parser.parseLine("foobar move up")) orelse return error.ExpectedEvent;
 
-        std.testing.expect(result == .move);
-        std.testing.expectEqualStrings("foobar", result.move.selector.groups);
-        std.testing.expectEqual(MoveData.Type.up, result.move.direction);
+        try std.testing.expect(result == .move);
+        try std.testing.expectEqualStrings("foobar", result.move.selector.groups);
+        try std.testing.expectEqual(MoveData.Type.up, result.move.direction);
     }
 
     {
         const result = (try parser.parseLine("foobar move down")) orelse return error.ExpectedEvent;
 
-        std.testing.expect(result == .move);
-        std.testing.expectEqualStrings("foobar", result.move.selector.groups);
-        std.testing.expectEqual(MoveData.Type.down, result.move.direction);
+        try std.testing.expect(result == .move);
+        try std.testing.expectEqualStrings("foobar", result.move.selector.groups);
+        try std.testing.expectEqual(MoveData.Type.down, result.move.direction);
     }
 }
 
@@ -806,7 +804,7 @@ test "parser: whole file" {
 test "parser: subsume" {
     const result = (try Parser.init().parseLine("parent subsume child")) orelse return error.ExpectedEvent;
 
-    std.testing.expect(result == .subsume);
-    std.testing.expectEqualStrings("parent", result.subsume.selector.groups);
-    std.testing.expectEqualStrings("child", result.subsume.groups);
+    try std.testing.expect(result == .subsume);
+    try std.testing.expectEqualStrings("parent", result.subsume.selector.groups);
+    try std.testing.expectEqualStrings("child", result.subsume.groups);
 }

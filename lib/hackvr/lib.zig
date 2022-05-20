@@ -38,7 +38,7 @@ pub const Group = struct {
     translation: zlm.Vec3,
     rotation: zlm.Vec3,
 
-    pub fn init(allocator: *std.mem.Allocator, name: []const u8) Self {
+    pub fn init(allocator: std.mem.Allocator, name: []const u8) Self {
         return Self{
             .name = name,
             .shapes = std.ArrayList(Shape3D).init(allocator),
@@ -57,7 +57,7 @@ pub const Group = struct {
 pub const State = struct {
     const Self = @This();
 
-    allocator: *std.mem.Allocator,
+    allocator: std.mem.Allocator,
 
     /// storage for shape vertices and group names
     arena: std.heap.ArenaAllocator,
@@ -65,7 +65,7 @@ pub const State = struct {
     /// flat list of all groups
     groups: std.ArrayList(Group),
 
-    pub fn init(allocator: *std.mem.Allocator) Self {
+    pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
             .allocator = allocator,
             .arena = std.heap.ArenaAllocator.init(allocator),
@@ -89,7 +89,7 @@ pub const State = struct {
             }
         }
 
-        const name_ptr = try std.mem.dupe(&self.arena.allocator, u8, name);
+        const name_ptr = try self.arena.allocator().dupe(u8, name);
         errdefer self.allocator.free(name_ptr);
 
         const grp = try self.groups.addOne();
@@ -185,7 +185,7 @@ pub fn applyEventToState(state: *State, event: parsing.Event) !void {
                     .color = cmd.color,
                     .luminance = 200,
                 },
-                .points = try std.mem.dupe(&state.arena.allocator, Vec3D, cmd.polygon),
+                .points = try state.arena.allocator().dupe(Vec3D, cmd.polygon),
             };
         },
         .move => |cmd| {
@@ -206,7 +206,7 @@ pub fn applyEventToState(state: *State, event: parsing.Event) !void {
             }
         },
         .rename_group => |cmd| {
-            var new_name = try std.mem.dupe(&state.arena.allocator, u8, cmd.groups);
+            var new_name = try state.arena.allocator().dupe(u8, cmd.groups);
 
             var iter = state.findGroups(cmd.selector.groups);
             while (iter.next()) |grp| {
@@ -223,7 +223,7 @@ pub fn applyEventToState(state: *State, event: parsing.Event) !void {
                     grp.parent = parent_index;
                 }
             } else {
-                std.debug.print("Group '{}' does not exist!", .{cmd.selector.groups});
+                std.debug.print("Group '{s}' does not exist!", .{cmd.selector.groups});
             }
         },
         else => {
@@ -247,20 +247,20 @@ test "State.iterator" {
     var iter = state.iterator();
     while (iter.next()) |grp| {
         if (grp == grp1) {
-            std.testing.expectEqual(false, found1);
+            try std.testing.expectEqual(false, found1);
             found1 = true;
         }
         if (grp == grp2) {
-            std.testing.expectEqual(false, found2);
+            try std.testing.expectEqual(false, found2);
             found2 = true;
         }
         if (grp == grp3) {
-            std.testing.expectEqual(false, found3);
+            try std.testing.expectEqual(false, found3);
             found3 = true;
         }
     }
 
-    std.testing.expect(found1 and found2 and found3);
+    try std.testing.expect(found1 and found2 and found3);
 }
 
 test "State.findGroups" {
@@ -278,19 +278,19 @@ test "State.findGroups" {
     var iter = state.findGroups("a*");
     while (iter.next()) |grp| {
         if (grp == grp1) {
-            std.testing.expectEqual(false, found1);
+            try std.testing.expectEqual(false, found1);
             found1 = true;
         }
         if (grp == grp2) {
-            std.testing.expectEqual(false, found2);
+            try std.testing.expectEqual(false, found2);
             found2 = true;
         }
         if (grp == grp3) {
-            std.testing.expect(false);
+            try std.testing.expect(false);
         }
     }
 
-    std.testing.expect(found1 and found2 and !found3);
+    try std.testing.expect(found1 and found2 and !found3);
 }
 
 test "applyEventToState (add_shape)" {
@@ -311,17 +311,17 @@ test "applyEventToState (add_shape)" {
 
     try applyEventToState(&state, event);
 
-    std.testing.expectEqual(@as(usize, 1), state.groups.items.len);
+    try std.testing.expectEqual(@as(usize, 1), state.groups.items.len);
 
     const grp = &state.groups.items[0];
-    std.testing.expectEqualStrings("grp", grp.name);
-    std.testing.expectEqual(@as(usize, 1), grp.shapes.items.len);
+    try std.testing.expectEqualStrings("grp", grp.name);
+    try std.testing.expectEqual(@as(usize, 1), grp.shapes.items.len);
 
     const shp = &grp.shapes.items[0];
-    std.testing.expectEqual(@as(u8, 123), shp.attributes.color);
-    std.testing.expectEqual(@as(usize, 0), shp.group);
-    std.testing.expectEqualSlices(Vec3D, event.add_shape.polygon, shp.points);
-    std.testing.expectEqual(Vec3D{ .x = 0, .y = 0, .z = 0 }, shp.velocity);
+    try std.testing.expectEqual(@as(u8, 123), shp.attributes.color);
+    try std.testing.expectEqual(@as(usize, 0), shp.group);
+    try std.testing.expectEqualSlices(Vec3D, event.add_shape.polygon, shp.points);
+    try std.testing.expectEqual(Vec3D{ .x = 0, .y = 0, .z = 0 }, shp.velocity);
 }
 
 test "applyEventToState (subsume)" {
@@ -345,9 +345,9 @@ test "applyEventToState (subsume)" {
     const grp1 = try state.getOrCreateGroup("parent");
     const grp2 = try state.getOrCreateGroup("child_1");
 
-    std.testing.expectEqual(@as(?usize, 1), grp0.parent);
-    std.testing.expectEqual(@as(?usize, null), grp1.parent);
-    std.testing.expectEqual(@as(?usize, 1), grp2.parent);
+    try std.testing.expectEqual(@as(?usize, 1), grp0.parent);
+    try std.testing.expectEqual(@as(?usize, null), grp1.parent);
+    try std.testing.expectEqual(@as(?usize, 1), grp2.parent);
 }
 
 test "Update state with file" {
@@ -373,7 +373,7 @@ test "Update state with file" {
         }
     }
 
-    std.testing.expectEqual(@as(usize, 192), state.groups.items.len);
+    try std.testing.expectEqual(@as(usize, 192), state.groups.items.len);
 }
 
 /// Tests if `group_name` matches the `pattern`.
@@ -396,33 +396,33 @@ pub fn isWildcardPattern(pattern: []const u8) bool {
 }
 
 test "wildcardEquals empty match" {
-    std.testing.expect(wildcardEquals("", ""));
+    try std.testing.expect(wildcardEquals("", ""));
 }
 
 test "wildcardEquals normal match" {
-    std.testing.expect(wildcardEquals("foobar", "foobar"));
+    try std.testing.expect(wildcardEquals("foobar", "foobar"));
 }
 
 test "wildcardEquals normal mismatch" {
-    std.testing.expect(wildcardEquals("barfoo", "foobar") == false);
+    try std.testing.expect(wildcardEquals("barfoo", "foobar") == false);
 }
 
 test "wildcardEquals pattern too long" {
-    std.testing.expect(wildcardEquals("pattern", "bar") == false);
+    try std.testing.expect(wildcardEquals("pattern", "bar") == false);
 }
 
 test "wildcardEquals group_name too long" {
-    std.testing.expect(wildcardEquals("pat", "foobar") == false);
+    try std.testing.expect(wildcardEquals("pat", "foobar") == false);
 }
 
 test "wildcardEquals pattern wildcard exact match" {
-    std.testing.expect(wildcardEquals("pat*", "pat"));
+    try std.testing.expect(wildcardEquals("pat*", "pat"));
 }
 
 test "wildcardEquals pattern wildcard prefix match" {
-    std.testing.expect(wildcardEquals("pat*", "pattern"));
+    try std.testing.expect(wildcardEquals("pat*", "pattern"));
 }
 
 test "wildcardEquals pattern wildcard prefix non-match" {
-    std.testing.expect(wildcardEquals("pattern*", "pat") == false);
+    try std.testing.expect(wildcardEquals("pattern*", "pat") == false);
 }
