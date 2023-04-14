@@ -1,156 +1,219 @@
-# HackVR Specification
+# HackVR Protocol
 
-**Note:**
-This specification is inofficial and based on the development of HackVR Turbo (which is based on the original hackvr)
+A protocol to connect to basic interactive 3D environments.
 
-## Virtual Environment
+## Goal 
 
-The HackVR virtual environment is structured in a tree of groups. Each group contains a set of polygons with 1 … n vertices. Each polygon may have it's own color, chosen from a palette. This environment is built and modified via commands on `stdin`. Interactions by the user with the environment are passed to `stdout`.
+The goal of HackVR is to allow a user to connect to a 3D site in the internet. This sites
+can contain interactive and hyperlinked 3D spaces the user can explore.
 
-### Groups
-Groups are unordered sets of polygons with a transformation in 3D space. Each vertex of the polygons is relative to the group origin. Transformations on the group (or any of its parents) will thus indirectly apply to the vertices.
+These spaces can be games, virtual museums, interactive applications or any other application.
 
-### Polygons (Shapes)
-Each polygon may have 1 (circle) up to n (n-gon) vertices. Each polygon is allowed to have any orientation in space, but is required to have all vertices to be on a plane. HackVR is allowed to enforce this and normalize all polygons to be on their mean plane.
-A polygon also has a velocity relative to its group and a color, chosen from a palette.
+## Highlevel View
 
-### Colors (Palette)
-HackVR has a default palette with 16 different colors:
+The protocol is designed as an extension to the HTTP protocol similar to how WebSockets are an extension.
 
-| Color Index | Visual Description / Name | Default Value |
-|-------------|---------------------------|---------------|
-| 0           | Black                     | #111111       |
-| 1           | White                     | #EEEEEE       |
+HackVR is a stream based protocol that has a line-oriented syntax. Each line contains a command that is
+transferred to either the client (HackVR viewer) or the server (HackVR host).
+
+The protocol uses the url scheme `hackvr`, which follows the same rules as the `http` scheme. Similar to
+`https`, there's also the `hackvrs` scheme that uses a TLS encrypted communication.
+
+## Structural Decisions
 
 ### Coordinate System
 
 HackVR uses the right-handed OpenGL coordinate system. In a standard-oriented view, the camera has the following coordinates:
 
 | Direction | Vector     |
-|-----------|------------|
+| --------- | ---------- |
 | Right     | (1, 0, 0)  |
 | Upward    | (0, 1, 0)  |
 | Forward   | (0, 0, -1) |
 
-## I/O
-HackVR communicates via `stdin`/`stdout`. Commands are passed on a line-by-line basis, each line is terminated by a LF character, optionally preceeded by a CR character.
-Each line must be encoded in valid UTF-8.
+## Protocol
+
+HackVR is medium independent and only requires a bi-directional data stream.
+
+This stream is then chopped into `CR` `LF` terminated lines.
+
+Each line contains a single command and its parameters. Valid characters in a line are all legal UTF-8 characters, excluding the ASCII control codes. The only allowed control codes in a line are `TAB` and `LF`.
+
+A lone `LF` signals a line break inside an argument, so a command can receive multiline text as an argument. `TAB` is used to separate arguments. This means that an argument is not allowed to contain a `TAB` character, or any other control code, except `LF`.
+
+The number of arguments varys between the commands.
+
+
+### HTTP Upgrade Protocol
+
+This version of the protocol is based on HTTP and allows integrating HackVR into already existing infrastructure:
+
+The initial handshake is performed by a HTTP 1.1 connection upgrade:
+
+```
+GET /example HTTP/1.1
+Host: www.example.com
+Connection: upgrade
+Upgrade: hackvr
+```
+
+After that, the command protocol is used. Additional HTTP headers are allowed, but ignored.
 
 ## Commands
 
-Commands in a line are separated by one or more whitespace characters (SPACE, TAB). Commands are usually prefixed by a group selector `[group]`, only exception to that are `version` and `help`. 
+The command documentation uses a syntax that is common to regular command line applications:
+- A single word is considered verbatim (`echo`)
+- Anything in square brackets is considered an optional element (`[optional]`)
+- Anything in pointy brackets is considered a variable argument (`<x>`)
+- Anything in curly brackets can be repeated several times, including zero (`{ <x> <y> }`)
 
-Everything after a `#` in a line is considered a comment and will be ignored by the command processor. The same is true for lines not containing any non-space characters.
+Arguments can also be optional, these will be noted as `[<var>]`.
 
-> TODO: group names can be globbed in some cases to operate on multiple groups
->  some commands that take numbers as arguments can be made to behave relative by putting + before the number. makes negative relative a bit odd like:
-> ``` 
-> user move +-2 +-2 0
-> groupnam* command arguments
-> ```
+Types are for variable arguments are separated by a `:` from the name: `<name:type>`
 
-A hint on notation:
-Everything in square brackets (`[]`) is a placeholder and will be replaced by the actual values in the protocol.
-Common placeholders are:
-- `[group]` The name of a group.
-- `[groupspec]` A group matching pattern. Either a name of a group or a prefix followed by `*`
+`type` can be one of the following:
 
-## Input Commands
+| Type     | Syntax                            | Description                                                       | Examples                   |
+| -------- | --------------------------------- | ----------------------------------------------------------------- | -------------------------- |
+| string   |                                   | Any text is allowed.                                              | `Hello`, `This is "mice"`  |
+| float    | `-?\d+.?\d*`                      | Contains a decimal floating point number.                         | `3.14`, `0`, `-1.2`        |
+| bool     | `true\|false`                     |                                                                   | `true`, `false`            |
+| vec2     | `(<x:float> <y:float>)`           | A position in 2D space.                                           | `(1.0 2.0)` `(0 0)`        |
+| vec3     | `(<x:float> <y:float> <z:float>)` | A position in 3D space.                                           | `(1.0 2.0 3.0)`, `(0 0 0)` |
+| color    | `#RRGGBB`                         | A 24 bit sRGB color                                               | `#FF0000`, `#FFFFFF`       |
+| userid   | `[A-Za-z0-9\-\_]+`                | A user name                                                       | `xq`, `anonymouse`         |
+| object   | `\$?[A-Za-z0-9\-\_]+`             | A unique identifier for an object.                                | `$global`, `player_1`      |
+| view     | `\$?[A-Za-z0-9\-\_]+`             | A unique identifier for a view.                                   | `$global`, `nice-view`     |
+| geom     | `\$?[A-Za-z0-9\-\_]+`             | A unique identifier for a geometry.                               | `$global`, `human-head`    |
+| bytes[N] | `[A-Za-z0-9]{2*N}`                | A hexadecimal sequence of hex-encoded bytes. N is a fixed length. | `00`, `1337`, `BADECAFE`   |
 
-### `help`
+#### Chat System
 
-### `version`
+> `chat <user:userid> <message:string>`
 
-### `[groupspec] deleteallexcept grou*`
-Deletes all groups not matching `grou*`.
+Notifies that a chat message by `<user>` was sent. `<message>` contains the sent text. If the command is sent from a client, the user name
+may be empty. Chat messages from a server always have a user name present.
 
-### `[groupspec] deletegroup grou*`
-Deletes all groups matching `grou*`.
+Chat messages from a client will be echoed by the server back to client. Note that chat messages might be silently ignored by the server
+when the user is muted, not authenticated or due to similar reasons.
 
-### `[groupspec] assimilate [groupspec]`
+#### Authentication (optional)
 
-### `[groupspec] renamegroup group`
-Renames and merges groups. Selects all groups with `groupspec` and renames them to `group`. When multiple groups are selected, those groups are merged into the master group.
+> `set-user <user:userid>` (client command)
 
-> TODO: Define how transforms will merge
+Attempts to change the active user account to `<user>`. If authentication is required, the following command is issued:
 
-### `[groupspec] status`
-**deprecated**
+> `request-authentication <user:userid> <salt:string>` (server command)
 
-Just outputs a variable that is supposed to be loops per second.`
+Requests authentication for the `<user>`. The password is to be hashed with hex-encoded 16 byte `<salt>`. The client is then to respond
+with the following command:
 
-### `[groupspec] dump`
-Tries to let you output the various things that can be set.`
+> `authenticate <user:userid> <pwhash:bytes[?]>` (client command)
 
-### `[groupspec] quit`
-Closes hackvr only if the id that is doing it is the same as yours.`
+The `<pwhash>` is a Argon2 hash of the users password hashed with the `<salt>` that was provided by `request-authentication`. This allows
+the server to hash each users password with a different salt to decrease authentication vulnerabilities.
 
-### `[groupspec] set [key] [value]`
+After this, one of the two following commands is issued:
 
-Sets different properties in the world. Known properties are:
+> `accept-user <user:userid> [<session-token:string>]` (server command)
+> 
+> `reject-user <user:userid> <reason:string>` (server command)
 
-| Property      | Type  | Description         |
-|---------------|-------|---------------------|
-| `global.zoom` | `int` | ???                 |
-| `camera.p.x`  | `int` | Camera X coordinate |
-| `camera.p.y`  | `int` | Camera Y coordinate |
-| `camera.p.z`  | `int` | Camera Z coordinate |
+If authentication fails, either after `set-user` or `authenticate`, the server responds with `reject-user` and gives a human-readable message in `<reason>`.
 
-### `[groupspec] physics`
+Otherwise, the user is successfully authenticated when the client receives `accept-user`. This command also optionally can provide a `<session-token>` the user can use to resume a session later on without authenticating itself again. This is done by issuing the following command:
 
-### `[groupspec] control grou*`
-> Globbing this group could have fun effects
+> `resume-session <user:userid> <session-token:string>` (client command)
 
-### `[group] addshape [color] [N] [x1] [y1] [z1] … [xN] [yN] [zN]`
-Adds a new polygon to `[group]`. It uses the color from palette index `[color]`. The polygon has `[N]` vertices with coordinates (`[x1]`, `[y1]`, `[z1]`) to (`[xN]`, `[yN]`, `[zN]`).
+This command is then responded with either `accept-user` or with `reject-user` and a reason. If `accept-user` is sent, the session token may be refreshed by the server. If no session token is provided, the token is still valid and can be used again later.
 
-### `[groupspec] export grou*`
+#### Geometry Management
 
-### `[groupspec] ping any-string-without-spaces`
+Geometries are triangle soups that can be attached to objects. Triangles can be added and removed from geometries, but there are no queries possible. This means the server has to keep track of geometries modified at runtime, but can just fire-and-forget most geometry creation.
 
+There is a single predefined geometry called `$global`. This geometry is assigned to the object `$global` by default and can be used to construct a global scene without having to create boilerplate objects and geometries first.
 
-### `[groupspec] rotate [+]x [+]y [+]z`
-Rotates all groups in `[groupspec]`. The rotation is either applied absolute (no `+` prefix) or relative (with `+` prefix)
+> `create-geometry <id:geom>` (server command)
 
-Rotating 5 degrees to the right:
-```
-rotate +0 +-5 +0
-```
+> `destroy-geometry <id:geom>` (server command)
 
-### `[groupspec] periodic`
-Flushes out locally-cached movement and rotation
+> `add-triangle-list <id:geom> { <p0:vec3> <p1:vec3> <p2:vec3> <color:color> }` (server command)
+>
+> `add-triangle-strip <id:geom> <color:color> <p0:vec3> <p1:vec3> <p2:vec3> { <pos:vec3> }` (server command)
+> 
+> `add-triangle-fan <id:geom> <color:color> <p0:vec3> <p1:vec3> <p2:vec3> { <pos:vec3> }` (server command)
 
-### `[groupspec] flatten`
-Applies the current group transform to all contained vertices in the selected groups and will reset set the group transforms to *none*.
+Adds new triangles to `<id>`. `add-triangle-list` will add as many triangles as given, each triangle being of a unique color.
 
-### `[groupspec] move [+]x [+]y [+]z`
+`add-triangle-strip` and `add-triangle-fan` will add at least a single triangle, but both allow
+to add more triangles that share vertices with previous tris. All triangles added with
+those commands share the same color.
 
-### `[groupspec] move forward|backward|up|down|left|right`
+In `add-triangle-strip`, each additional point will create a new triangle from the new point and the last two recent points added. This way, a long chain of triangles can be formed.
 
-### `[parent] subsume [child]`
-This command will make `[child]` a child of `[parent]`. Every translation/rotation of `[child]` will be relative to `[parent]`
+In `add-triangle-fan`, each additional point will create a new triangle from the frist and the last point added. This way, all new added triangles will fan around a single center point.
 
-## Output Commands
+#### Object Management
 
-### `[name] action [targetgroup]`
+Objects are things in the 3D space that have a position, orientation and scale. Objects can have a geometry attached, which makes them visible.
 
-when a group is clicked on using the name set from the command line. usually `$USER`
+There is a predefined object `$global` that is present without creation. It has the geometry `$global` attached, which allows the creation of 3D scenes without boilerplate. This object is located at (0,0,0) with no rotation or scale.
 
+> `create-object <obj:object> [<g:geom>]` (server command)
 
+> `destroy-object <obj:object>` (server command)
 
-## Changes
+> `add-child <parent:object> <child:object> [<transform>]` (server command)
 
-- Encoding is assumed UTF-8
-- Max. line length excluding the `\n` is 1024 bytes
-- Polygons are required to be *flat*
+Makes `<child>` a child of `<parent>`. This means that all coordinates of `<child>` are now relative to the coordinate system of `<parent>`.
 
-## TODO
+`<transform>` can have several values:
 
-- Define relative coordinate system for "forward/backward/…"
-- Full color table
-- Imlement `subsume` command
+| Transform         | Description                                                                           |
+| ----------------- | ------------------------------------------------------------------------------------- |
+| `world` (default) | Keeps the current world space transformation, so the object does not visually change. |
+| `local`           | Keeps the local transformation and just reparents the object.                         |
 
-### Questions
-- Shape velocity
-- Transformation order/execution
-- Colors
+> `set-object-geometry <obj:object> <g:geom>` (server command)
+
+> `set-object-property <obj:object> <property:string> <value:any>` (server command)
+
+Valid properties are:
+
+| Property    | Type | Description                                                                                                                                                                                                              |
+| ----------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `href`      | URI  | Sets a hyperref to the given object. If the user clicks the object, the hyperref is resolved and opened. If a HackVR document is opened, the viewer should close the current connection and connect to the new document. |
+| `clickable` | BOOL | If `true`, when the user clicks the object, a `tap-object` command should be sent.                                                                                                                                       |
+| `textinput` | BOOL | If `true`, the user can send a text message to an object. This will result in a `tell-object` command.                                                                                                                   |
+
+#### View Management
+
+> `create-view <view-id> <pos:vec3> <view-dir:vec3>` (server command)
+
+> `destroy-view <view-id>` (server command)
+
+#### Interaction
+
+> `enable-movement <enabled:bool>` (server command)
+
+Enables or disables autonomous user movement. The movement is usually a fly-through camera.
+
+> `set-view <id:view> [<smooth:bool>] [<duration:float>]`
+
+Moves the camera view to `<view-id>`. If `<smooth>` is present and `true`, the camera will perform a smooth camera transition from the current position to the new one.
+
+The transition takes `<duration>` seconds or, if `<duration>` is not present, roughly 500 ms.
+
+> `tap-object <id:object> <button> <triangle-index:uint>` (client command)
+
+Taps an object with the `primary` or `secondary` mouse `<button>`. This is an interaction when a user clicks on an object with the mouse.
+
+`<triangle-index:uint>` contains the triangle the user clicked.
+
+> `tell-object <id:object> <text:string>` (client command)
+
+Sends a text message to an object. 
+
+> `change-view <pos:vec3> <view-dir:vec3>` (client commmand)
+
+The user moved the camera to another location
