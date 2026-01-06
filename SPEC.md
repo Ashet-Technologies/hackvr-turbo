@@ -133,15 +133,15 @@ Geometries are triangle soups that can be attached to objects. Triangles can be 
 
 There is a single predefined geometry called `$global`. This geometry is assigned to the object `$global` by default and can be used to construct a global scene without having to create boilerplate objects and geometries first.
 
-> `create-geometry <id:geom>` (server command)
+> `create-geometry  <id:geom>` (server command)
 
 > `destroy-geometry <id:geom>` (server command)
 
-> `add-triangle-list <id:geom> { <p0:vec3> <p1:vec3> <p2:vec3> <color:color> }` (server command)
+> `add-triangle-list  <id:geom> { <color:color> <p0:vec3> <p1:vec3> <p2:vec3> }` (server command)
 >
-> `add-triangle-strip <id:geom> <color:color> <p0:vec3> <p1:vec3> <p2:vec3> { <pos:vec3> }` (server command)
+> `add-triangle-strip <id:geom>   <color:color> <p0:vec3> <p1:vec3> <p2:vec3> { <pos:vec3> }` (server command)
 > 
-> `add-triangle-fan <id:geom> <color:color> <p0:vec3> <p1:vec3> <p2:vec3> { <pos:vec3> }` (server command)
+> `add-triangle-fan   <id:geom>   <color:color> <p0:vec3> <p1:vec3> <p2:vec3> { <pos:vec3> }` (server command)
 
 Adds new triangles to `<id>`. `add-triangle-list` will add as many triangles as given, each triangle being of a unique color.
 
