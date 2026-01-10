@@ -1,219 +1,602 @@
-# HackVR Protocol
+# HackVR Protocol Draft (refined, non-normative)
 
-A protocol to connect to basic interactive 3D environments.
+**Last edited:** 2026-01-10 17:26 (Europe/Berlin)
 
-## Goal 
+This document compiles the current working shape of the HackVR protocol. It is intentionally **not** normative yet, and some topics are explicitly left open.
 
-The goal of HackVR is to allow a user to connect to a 3D site in the internet. This sites
-can contain interactive and hyperlinked 3D spaces the user can explore.
+---
 
-These spaces can be games, virtual museums, interactive applications or any other application.
+## 1) Intent and philosophy
 
-## Highlevel View
+HackVR is a lightweight, stream-based protocol for connecting a **HackVR viewer (client)** to a **HackVR host (server)** that streams an interactive 3D scene.
 
-The protocol is designed as an extension to the HTTP protocol similar to how WebSockets are an extension.
+Goals:
 
-HackVR is a stream based protocol that has a line-oriented syntax. Each line contains a command that is
-transferred to either the client (HackVR viewer) or the server (HackVR host).
+- **Low barrier to creation:** a server can generate worlds by writing lines to a stream.
+- **Server-authoritative world state:** the server owns scene state; the client renders and reports user interactions.
+- **Hyperlinkable worlds:** objects can link to other worlds.
+- **Minimal primitives, lots of composition:** geometries + objects + billboards + verbs (“intents”) + picking/raycast input.
+- **Optimistic by design:** invalid commands, missing entities, or missing assets should degrade gracefully (ignore, show placeholders) rather than fail hard.
 
-The protocol uses the url scheme `hackvr`, which follows the same rules as the `http` scheme. Similar to
-`https`, there's also the `hackvrs` scheme that uses a TLS encrypted communication.
+Non-goals:
 
-## Structural Decisions
+- **No keyframe animation system:** only best-effort transform transitions.
+- **No continuous interaction primitives:** no drag/hold/analog streams; interactions are discrete events (taps, intents, text submission, ray input).
 
-### Coordinate System
+### 1.1 Conceptual operations vs exact state
 
-HackVR uses the right-handed OpenGL coordinate system. In a standard-oriented view, the camera has the following coordinates:
+HackVR operations are meant to target **semantic concepts**, not perfectly tracked low-level state.
 
-| Direction | Vector     |
-| --------- | ---------- |
-| Right     | (1, 0, 0)  |
-| Upward    | (0, 1, 0)  |
-| Forward   | (0, 0, -1) |
+- **Tags** describe *what something represents* (e.g., `door-main`, `enemy-goblin-03`) rather than triangle indices.
+- Servers are encouraged to treat the scene like a declarative UI: “remove everything tagged `door-*`” and then “add the new `door-*` triangles,” without relying on or querying exact client-side geometry state.
 
-## Protocol
+### 1.2 Coordinate system
 
-HackVR is medium independent and only requires a bi-directional data stream.
+Coordinate system: **right-handed OpenGL convention** (X right, Y up, Z forward is -Z).
 
-This stream is then chopped into `CR` `LF` terminated lines.
+---
 
-Each line contains a single command and its parameters. Valid characters in a line are all legal UTF-8 characters, excluding the ASCII control codes. The only allowed control codes in a line are `TAB` and `LF`.
+## 2) Transport, framing, and default HTTP upgrade path
 
-A lone `LF` signals a line break inside an argument, so a command can receive multiline text as an argument. `TAB` is used to separate arguments. This means that an argument is not allowed to contain a `TAB` character, or any other control code, except `LF`.
+### 2.1 Byte stream + line protocol
 
-The number of arguments varys between the commands.
+HackVR runs over any bidirectional byte stream.
 
+- The stream is split into **CRLF-terminated lines**.
+- Each line is a single command with **TAB-separated** arguments.
+- Text is **UTF-8**.
 
-### HTTP Upgrade Protocol
+Control characters are forbidden except:
 
-This version of the protocol is based on HTTP and allows integrating HackVR into already existing infrastructure:
+- **TAB** (argument separator)
+- **LF** (may appear *inside* a parameter to represent a newline)
 
-The initial handshake is performed by a HTTP 1.1 connection upgrade:
+#### 2.1.1 Formal grammar (EBNF)
+
+Terminals:
+
+- `CR` = U+000D
+- `LF` = U+000A
+- `TAB` = U+0009
+
+EBNF:
 
 ```
-GET /example HTTP/1.1
-Host: www.example.com
+stream    = { command } ;
+
+command   = name , { TAB , param } , CR , LF ;
+
+name      = sequence ;
+param     = sequence ;
+
+sequence  = { char } ;
+
+(* char is any Unicode scalar value except Cc control characters,
+   with the special exception that LF is allowed; CR and TAB are not allowed. *)
+char      = ? any Unicode scalar value satisfying:
+              (char == LF) OR (char not-in Cc AND char != CR AND char != TAB) ? ;
+```
+
+Additional notes:
+
+- `name` should be **non-empty**.
+- `TAB` is a separator, so it cannot appear inside `name` or `param`.
+- `CR` is not permitted anywhere except as part of the line terminator `CRLF`.
+
+#### 2.1.2 Escaping
+
+No escaping is available.
+
+- You cannot encode a literal `TAB` or `CR` inside a parameter.
+- You can encode multi-line text by including `LF` inside a parameter.
+
+#### 2.1.3 End-of-stream behavior
+
+If the stream ends:
+
+- The viewer **must keep showing the current scene**.
+- The viewer **must inform the user** that the connection was closed.
+- If a session token was provided, the viewer **may offer automatic session resumption**.
+- If no token was provided, the viewer **may offer a reconnect**.
+
+### 2.2 URL schemes
+
+- `hackvr://` (non-TLS)
+- `hackvrs://` (TLS)
+
+### 2.3 Default network path: HTTP/1.1 Upgrade
+
+HackVR can be negotiated via HTTP/1.1 `Upgrade: hackvr` (conceptually similar to WebSockets).
+
+Example client request:
+
+```http
+GET /world HTTP/1.1
+Host: example.com
 Connection: upgrade
 Upgrade: hackvr
 ```
 
-After that, the command protocol is used. Additional HTTP headers are allowed, but ignored.
+After a successful upgrade, the connection switches to the HackVR line protocol.
 
-## Commands
+---
 
-The command documentation uses a syntax that is common to regular command line applications:
-- A single word is considered verbatim (`echo`)
-- Anything in square brackets is considered an optional element (`[optional]`)
-- Anything in pointy brackets is considered a variable argument (`<x>`)
-- Anything in curly brackets can be repeated several times, including zero (`{ <x> <y> }`)
+## 3) Commands
 
-Arguments can also be optional, these will be noted as `[<var>]`.
+### Conventions
 
-Types are for variable arguments are separated by a `:` from the name: `<name:type>`
+- `<name:type>` denotes a typed argument.
+- `<name:[]type>` means the argument supports **selectors/globbing** (see **3.9 Selectors and globbing**).
+- `[...]` optional, `{...}` repeated 0+ times.
 
-`type` can be one of the following:
+Optional parameters may be:
 
-| Type     | Syntax                            | Description                                                       | Examples                   |
-| -------- | --------------------------------- | ----------------------------------------------------------------- | -------------------------- |
-| string   |                                   | Any text is allowed.                                              | `Hello`, `This is "mice"`  |
-| float    | `-?\d+.?\d*`                      | Contains a decimal floating point number.                         | `3.14`, `0`, `-1.2`        |
-| bool     | `true\|false`                     |                                                                   | `true`, `false`            |
-| vec2     | `(<x:float> <y:float>)`           | A position in 2D space.                                           | `(1.0 2.0)` `(0 0)`        |
-| vec3     | `(<x:float> <y:float> <z:float>)` | A position in 3D space.                                           | `(1.0 2.0 3.0)`, `(0 0 0)` |
-| color    | `#RRGGBB`                         | A 24 bit sRGB color                                               | `#FF0000`, `#FFFFFF`       |
-| userid   | `[A-Za-z0-9\-\_]+`                | A user name                                                       | `xq`, `anonymouse`         |
-| object   | `\$?[A-Za-z0-9\-\_]+`             | A unique identifier for an object.                                | `$global`, `player_1`      |
-| view     | `\$?[A-Za-z0-9\-\_]+`             | A unique identifier for a view.                                   | `$global`, `nice-view`     |
-| geom     | `\$?[A-Za-z0-9\-\_]+`             | A unique identifier for a geometry.                               | `$global`, `human-head`    |
-| bytes[N] | `[A-Za-z0-9]{2*N}`                | A hexadecimal sequence of hex-encoded bytes. N is a fixed length. | `00`, `1337`, `BADECAFE`   |
+- **Omitted** (fewer parameters in the command)
+- **Present but empty** (consecutive TABs)
 
-#### Chat System
+Example: the following both match `foo [<bar:string>] [<bam:string>]`, and in both cases `bar=""` and `bam=""`:
 
-> `chat <user:userid> <message:string>`
+- `foo<CR><LF>`
+- `foo<TAB><TAB><CR><LF>`
 
-Notifies that a chat message by `<user>` was sent. `<message>` contains the sent text. If the command is sent from a client, the user name
-may be empty. Chat messages from a server always have a user name present.
+Direction:
 
-Chat messages from a client will be echoed by the server back to client. Note that chat messages might be silently ignored by the server
-when the user is muted, not authenticated or due to similar reasons.
+- **S→C** server to client
+- **C→S** client to server
+- **↔** either direction
 
-#### Authentication (optional)
+### 3.1 Chat
 
-> `set-user <user:userid>` (client command)
+- **↔** `chat <user:userid> <message:string>`
+  - Server→client must include a user.
+  - Client→server may use an empty user.
 
-Attempts to change the active user account to `<user>`. If authentication is required, the following command is issued:
+### 3.2 Authentication and sessions (optional)
 
-> `request-authentication <user:userid> <salt:string>` (server command)
+> Note: This is intended to be “good enough” for hobby worlds. Serious applications should use TLS (`hackvrs://`) and/or external auth.
 
-Requests authentication for the `<user>`. The password is to be hashed with hex-encoded 16 byte `<salt>`. The client is then to respond
-with the following command:
+Login prompt:
 
-> `authenticate <user:userid> <pwhash:bytes[?]>` (client command)
+- **S→C** `request-user [<prompt:string>]`
+  - Viewer shows a login prompt (username).
+  - Viewer responds with `set-user`.
 
-The `<pwhash>` is a Argon2 hash of the users password hashed with the `<salt>` that was provided by `request-authentication`. This allows
-the server to hash each users password with a different salt to decrease authentication vulnerabilities.
+Identity:
 
-After this, one of the two following commands is issued:
+- **C→S** `set-user <user:userid>`
 
-> `accept-user <user:userid> [<session-token:string>]` (server command)
-> 
-> `reject-user <user:userid> <reason:string>` (server command)
+Password challenge/response (if required by the server):
 
-If authentication fails, either after `set-user` or `authenticate`, the server responds with `reject-user` and gives a human-readable message in `<reason>`.
+- **S→C** `request-authentication <user:userid> <salt:bytes[16]>`
+- **C→S** `authenticate <user:userid> <pwhash:bytes[N]>`
 
-Otherwise, the user is successfully authenticated when the client receives `accept-user`. This command also optionally can provide a `<session-token>` the user can use to resume a session later on without authenticating itself again. This is done by issuing the following command:
+Authentication guidance:
 
-> `resume-session <user:userid> <session-token:string>` (client command)
+- Password KDF: **PBKDF2-HMAC-SHA256** (iteration count and output size are implementation-defined, but must be consistent per server).
+- `salt` is server-provided, 16 bytes.
 
-This command is then responded with either `accept-user` or with `reject-user` and a reason. If `accept-user` is sent, the session token may be refreshed by the server. If no session token is provided, the token is still valid and can be used again later.
+Result:
 
-#### Geometry Management
+- **S→C** `accept-user <user:userid> [<session-token:string>]`
+- **S→C** `reject-user <user:userid> <reason:string>`
 
-Geometries are triangle soups that can be attached to objects. Triangles can be added and removed from geometries, but there are no queries possible. This means the server has to keep track of geometries modified at runtime, but can just fire-and-forget most geometry creation.
+Session resumption:
 
-There is a single predefined geometry called `$global`. This geometry is assigned to the object `$global` by default and can be used to construct a global scene without having to create boilerplate objects and geometries first.
+- **C→S** `resume-session <user:userid> <session-token:string>`
 
-> `create-geometry <id:geom>` (server command)
+Session token guidance:
 
-> `destroy-geometry <id:geom>` (server command)
+- Session tokens should be **cryptographically random** (128+ bits).
+- Replay protection is recommended (single-use and/or time-limited), implementation-defined.
 
-> `add-triangle-list <id:geom> { <p0:vec3> <p1:vec3> <p2:vec3> <color:color> }` (server command)
->
-> `add-triangle-strip <id:geom> <color:color> <p0:vec3> <p1:vec3> <p2:vec3> { <pos:vec3> }` (server command)
-> 
-> `add-triangle-fan <id:geom> <color:color> <p0:vec3> <p1:vec3> <p2:vec3> { <pos:vec3> }` (server command)
+### 3.3 Graphical Interface
 
-Adds new triangles to `<id>`. `add-triangle-list` will add as many triangles as given, each triangle being of a unique color.
+#### 3.3.1 Text Input
 
-`add-triangle-strip` and `add-triangle-fan` will add at least a single triangle, but both allow
-to add more triangles that share vertices with previous tris. All triangles added with
-those commands share the same color.
+- **S→C** `request-input <id:input> <prompt:string> [<default:string>]`
+  - Viewer shows a modal text input box.
 
-In `add-triangle-strip`, each additional point will create a new triangle from the new point and the last two recent points added. This way, a long chain of triangles can be formed.
+- **↔** `cancel-input <id:input>`
+  - Cancels a pending input request.
+  - Viewer: closes the modal if it is still open.
+  - Server: should ignore if the input was already completed.
 
-In `add-triangle-fan`, each additional point will create a new triangle from the frist and the last point added. This way, all new added triangles will fan around a single center point.
+- **C→S** `send-input <id:input> [<text:string>]`
+  - Sends the entered text.
+  - Empty text is allowed and does **not** mean cancel.
+  - If a viewer supports “cancel”, it should use `cancel-input`.
 
-#### Object Management
+#### 3.3.2 Banner
 
-Objects are things in the 3D space that have a position, orientation and scale. Objects can have a geometry attached, which makes them visible.
+- **S→C** `set-banner <text:string> [<t:float>]`
+  - Show informational text to the user.
+  - Empty text clears.
+  - If `t` is provided, auto-hide after `t` seconds.
 
-There is a predefined object `$global` that is present without creation. It has the geometry `$global` attached, which allows the creation of 3D scenes without boilerplate. This object is located at (0,0,0) with no rotation or scale.
+### 3.4 World Interaction
 
-> `create-object <obj:object> [<g:geom>]` (server command)
+#### 3.4.1 Object Interaction
 
-> `destroy-object <obj:object>` (server command)
+Client-originated interaction events do **not** use selectors/globbing.
 
-> `add-child <parent:object> <child:object> [<transform>]` (server command)
+- **C→S** `tap-object <obj:object> <kind:tapkind> <tag:tag>`
+  - Reports a pick on `<obj>` at the semantic triangle tag.
+  - Tapping always targets **user-visible geometry** (what the viewer is actually rendering).
 
-Makes `<child>` a child of `<parent>`. This means that all coordinates of `<child>` are now relative to the coordinate system of `<parent>`.
+- **C→S** `tell-object <obj:object> [<text:string>]`
+  - Text sent to an object marked `textinput`.
+  - Text may be empty.
 
-`<transform>` can have several values:
+#### 3.4.2 Intents (verbs / actions)
 
-| Transform         | Description                                                                           |
-| ----------------- | ------------------------------------------------------------------------------------- |
-| `world` (default) | Keeps the current world space transformation, so the object does not visually change. |
-| `local`           | Keeps the local transformation and just reparents the object.                         |
+Default intents always exist:
 
-> `set-object-geometry <obj:object> <g:geom>` (server command)
+`forward back left right up down stop`
 
-> `set-object-property <obj:object> <property:string> <value:any>` (server command)
+Additional intents can be defined dynamically:
 
-Valid properties are:
+- **S→C** `create-intent <id:intent> <label:string>`
+  - Add an extra intent the viewer can present (button, menu, keybind, radial menu, etc.).
+- **S→C** `destroy-intent <id:intent>`
+  - Remove a previously created additional intent.
 
-| Property    | Type | Description                                                                                                                                                                                                              |
-| ----------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `href`      | URI  | Sets a hyperref to the given object. If the user clicks the object, the hyperref is resolved and opened. If a HackVR document is opened, the viewer should close the current connection and connect to the new document. |
-| `clickable` | BOOL | If `true`, when the user clicks the object, a `tap-object` command should be sent.                                                                                                                                       |
-| `textinput` | BOOL | If `true`, the user can send a text message to an object. This will result in a `tell-object` command.                                                                                                                   |
+Triggering an intent:
 
-#### View Management
+- **C→S** `intent <id:intent> <view-dir:vec3>`
+  - User triggered an intent; includes current view direction so the server can interpret it.
+  - Intents are **semantic**: the server chooses whether an intent behaves as impulse, state change, menu navigation, etc.
 
-> `create-view <view-id> <pos:vec3> <view-dir:vec3>` (server command)
+#### 3.4.3 Raycast mode (directional input)
 
-> `destroy-view <view-id>` (server command)
+HackVR has two interaction modes:
 
-#### Interaction
+- **Picking mode (standard):** the viewer performs object/tag picking and sends `tap-object`.
+- **Raycast mode (directional):** the viewer gathers a ray and sends `raycast`.
 
-> `enable-movement <enabled:bool>` (server command)
+Raycast mode is a **temporary override** of picking mode: the server requests it, the user produces one ray (or cancels), and the viewer returns to picking mode.
 
-Enables or disables autonomous user movement. The movement is usually a fly-through camera.
+Raycasts do **not** have a “hit world.” They merely inform the server of **directional input**; the viewer does not compute intersections and does not send hit results.
 
-> `set-view <id:view> [<smooth:bool>] [<duration:float>]`
+- **S→C** `raycast-request`
+  - Enter raycast mode (viewer shows a crosshair/cursor; disables object/tag picking UI).
+- **S→C** `raycast-cancel`
+  - Exit raycast mode without selection.
+- **C→S** `raycast <origin:vec3> <dir:vec3>`
+  - User clicked while in raycast mode; viewer sends ray origin (camera position) and direction.
+  - The click terminates raycast mode on the client.
 
-Moves the camera view to `<view-id>`. If `<smooth>` is present and `true`, the camera will perform a smooth camera transition from the current position to the new one.
+### 3.6 Geometry management
 
-The transition takes `<duration>` seconds or, if `<duration>` is not present, roughly 500 ms.
+Geometries are a **reusable visual representation** that can be attached to objects.
 
-> `tap-object <id:object> <button> <triangle-index:uint>` (client command)
+- A geometry is identified by `<id:geom>`.
+- A geometry’s concrete kind is defined by how it was created (triangle soup vs text billboard vs image billboard).
+- There are no geometry queries, so servers should maintain canonical state for runtime edits.
 
-Taps an object with the `primary` or `secondary` mouse `<button>`. This is an interaction when a user clicks on an object with the mouse.
+Predefined:
 
-`<triangle-index:uint>` contains the triangle the user clicked.
+- `geom` **`$global`** exists.
 
-> `tell-object <id:object> <text:string>` (client command)
+Lifecycle:
 
-Sends a text message to an object. 
+- **S→C** `create-geometry <id:[]geom>`
+  - Creates a **triangle soup** geometry (the default geometry kind).
+- **S→C** `destroy-geometry <id:[]geom>`
 
-> `change-view <pos:vec3> <view-dir:vec3>` (client commmand)
+#### 3.6.1 Triangle Soups (default geometry)
 
-The user moved the camera to another location
+Triangle soups are the default geometry type.
+
+Triangle creation (tag-aware):
+
+- **S→C** `add-triangle-list  <id:[]geom> <tag:[]tag> { <color:color> <p0:vec3> <p1:vec3> <p2:vec3> }`
+- **S→C** `add-triangle-strip <id:[]geom> <tag:[]tag> <color:color> <p0:vec3> <p1:vec3> <p2:vec3> { <pos:vec3> }`
+- **S→C** `add-triangle-fan   <id:[]geom> <tag:[]tag> <color:color> <p0:vec3> <p1:vec3> <p2:vec3> { <pos:vec3> }`
+
+Tag semantics:
+
+- Tags are scoped to a geometry.
+- Tags are **kebab-case strings** intended to be self-documenting (`door-entrance`, `enemy-goblin-03`, `ui-button-start`).
+- Empty tag means **unreferenceable** (cannot be tapped, cannot be deleted).
+- Triangles with the same tag are semantically identical; no triangle index exists at the protocol level.
+
+Triangle removal (by tag match / selector):
+
+- **S→C** `remove-triangles <id:[]geom> <tag:[]tag>`
+  - Removes all triangles in `<id>` whose tag matches `<tag>`.
+
+Picking/occlusion note:
+
+- Tapping always targets **user-visible geometry**.
+- Hit priority is front-to-back by depth.
+- Tagged triangles behind untagged, fully opaque geometry are not clickable.
+
+#### 3.6.2 Text Billboards
+
+Text billboards are flat rectangles rendered in the world.
+
+- **S→C** `create-text-geometry <id:[]geom> <size:vec2> <font-uri:string> <font-sha256:bytes[32]> <text:string> [<anchor:anchor>] [<billboard:billboard>]`
+
+Defaults:
+
+- `anchor` defaults to `center-center`.
+- `billboard` defaults to `fixed`.
+
+Text fitting:
+
+- The viewer should render text so it **fits inside** the billboard rectangle ("contain").
+
+Billboard hit-testing:
+
+- Billboards are always treated like **two triangles forming a rectangle**.
+- Billboards are **never hit-test transparent**.
+
+Mutable text properties (common updates):
+
+- **S→C** `set-text-property <id:[]geom> <property:string> <value:string>`
+  - Common properties:
+    - `text` (string)
+    - `color` (`#RRGGBB`)
+
+Guidance:
+
+- For complex changes (font, billboard mode, anchor, sizing model), servers should destroy and recreate the text geometry.
+
+#### 3.6.3 Image Billboards
+
+Image billboards are flat rectangles rendered in the world.
+
+- **S→C** `create-sprite-geometry <id:[]geom> <size:vec2> <uri:string> <sha256:bytes[32]> [<size-mode:sizemode>] [<anchor:anchor>] [<billboard:billboard>]`
+
+Defaults:
+
+- `size-mode` defaults to `stretch`.
+- `anchor` defaults to `center-center`.
+- `billboard` defaults to `fixed`.
+
+Size mode semantics:
+
+- `stretch`: stretch to exactly fill `size`.
+- `cover`: preserve aspect ratio; fill `size` completely; crop overflow.
+- `contain`: preserve aspect ratio; fit entirely within `size`.
+- `fixed-width`: preserve aspect ratio; width = `size.x`, height derived.
+- `fixed-height`: preserve aspect ratio; height = `size.y`, width derived.
+
+Billboard hit-testing:
+
+- Billboards are always treated like **two triangles forming a rectangle**.
+- Billboards are **never hit-test transparent**.
+
+Asset semantics:
+
+- Hash is over downloaded bytes.
+- Failure or hash mismatch displays an error placeholder.
+
+Depth testing:
+
+- Billboards depth-test like opaque geometry.
+
+### 3.7 Object management (scene graph)
+
+Objects have transform (position/orientation/scale) and may reference a geometry.
+
+Predefined:
+
+- `object` **`$global`** exists at origin and has `$global` geometry attached.
+- `$global` is the **scene graph root** and **cannot be reparented**.
+
+Default parenting:
+
+- Unless otherwise specified, newly created objects are children of **`$global`**.
+
+Lifecycle and hierarchy:
+
+- **S→C** `create-object <obj:[]object> [<g:[]geom>]`
+- **S→C** `destroy-object <obj:[]object>`
+- **S→C** `add-child <parent:object> <child:[]object> [<space:string>]`
+  - `space` is `world` (default) or `local`.
+
+Geometry attachment:
+
+- **S→C** `set-object-geometry <obj:[]object> <g:geom>`
+  - Exactly one geometry is attached per object.
+
+Properties:
+
+- **S→C** `set-object-property <obj:[]object> <property:string> <value:string>`
+  - Common properties:
+    - `href` (hyperlink)
+    - `clickable` (`true/false`)
+    - `textinput` (`true/false`)
+
+Navigation security (for `href`):
+
+- Viewers **must require explicit user confirmation** before navigating to an `href`.
+- Viewers should clearly display the full target (including scheme) during confirmation.
+
+Transforms (with optional transition):
+
+- **S→C** `set-object-transform <obj:[]object> [<pos:vec3>] [<rot:euler>] [<scale:vec3>] [<t:float>]`
+
+Transition semantics:
+
+- Purpose: **best-effort visual smoothing**, not simulation.
+- Time base: viewer monotonic clock; no server timestamps.
+- Channels are independent (pos/rot/scale).
+- Updating a channel interrupts that channel and restarts from its current value.
+- Omitting a channel means its existing transition continues.
+- Guarantee: at the end of duration `t`, the object will be at the target transform.
+- During transition, motion is “close enough” for visual purposes; small drift due to jitter is acceptable.
+- Drift is bounded by the **longest active transition duration** (bounded, not cumulative).
+
+Rotation semantics:
+
+- `rot:euler` is authoring-friendly Euler angles.
+- Interpolation is performed in quaternion space derived from Euler.
+- Exact Euler axis/order/units are open topics.
+
+### 3.8 Views and camera control
+
+HackVR does not expose named views. The server directly sets the viewer’s camera pose.
+
+- **S→C** `set-view [<pos:vec3>] [<view-dir:vec3>] [<duration:float>]`
+  - Any omitted field remains unchanged.
+  - If `duration` is provided, transition over `duration` seconds.
+  - If omitted, change immediately.
+
+Free-look control (disjoint from `set-view`):
+
+- **S→C** `enable-free-look <enabled:bool>`
+  - When enabled, the viewer may allow immediate local pan/tilt rotation (“free look”).
+  - When disabled, the viewer should not allow free-look rotation.
+
+Background:
+
+- **S→C** `set-background-color <color:color>`
+  - Sets the viewer background color for the world.
+  - Default background color is `000080` (i.e. `#000080`).
+
+---
+
+### 3.9 Selectors and globbing
+
+HackVR supports selector syntax for **batching** and **semantic matching**.
+
+Selectors are supported for:
+
+- `object`, `geom`, and `tag` parameters (marked as `[]` in command signatures)
+
+Selectors are **not** supported for:
+
+- `userid`, `intent`, `input`
+
+General operation:
+
+- A selector expands to **zero or more concrete values**.
+- If a selector expands to zero values, the command becomes a no-op.
+- **No deterministic expansion order is required**; commands must not depend on selector expansion order.
+
+Creation + selectors:
+
+- For commands that *create* entities, selectors are allowed **only as expansions**, not as wildcards.
+  - Allowed: `{a,b,c}`, `{0..10}`, `{00..10}`
+  - Not allowed in create commands: `*` or `?`
+- If a create command targets an ID that already exists, the receiver should **re-create** it (replace existing with a fresh instance).
+
+Selector-friendly naming:
+
+- IDs and tags are kebab-case “parts” separated by `-`, e.g. `cheese-01-fancypants`.
+- `$global` remains reserved.
+
+Globbing syntax:
+
+- `*` matches zero or more kebab parts
+  - `cheese-*-done` matches `cheese-done`, `cheese-01-done`, `cheese-01-a-done`, ...
+- `?` matches exactly one kebab part
+  - `cheese-?-done` matches `cheese-01-done` but not `cheese-done`
+- `{a,b,c}` expands to variants
+- `{0..10}` expands to `0..10`
+- `{00..10}` expands to `00..10` (zero-padded width inferred from endpoints)
+
+---
+
+## 4) Types
+
+### 4.1 Primitive types
+
+- **string**: UTF-8 text. May be empty.
+- **float**: decimal floating point, must be non-empty.
+- **bool**: `true` or `false`, must be non-empty.
+- **int**: decimal integer, must be non-empty.
+- **vec2**: `(<x:float> <y:float>)`, must be non-empty.
+- **vec3**: `(<x:float> <y:float> <z:float>)`, must be non-empty.
+- **color**: `#RRGGBB` (24-bit), must be non-empty.
+- **bytes[N]**: fixed-length hex-encoded bytes of length N (2N hex chars), must be non-empty.
+
+### 4.2 Optional parameter mapping
+
+For an optional parameter `[<x:type>]`:
+
+- If the parameter is **omitted**, it maps to **absent/null**.
+- If the parameter is **present but empty**:
+  - For `string`, it maps to the **empty string** `""`.
+  - For all other types, it maps to **absent/null**.
+
+### 4.3 Identifier types
+
+- **userid** (regular string; not globbable)
+- **object**
+- **geom**
+- **intent**
+- **input** (token identifying a `request-input` / `send-input` exchange)
+
+### 4.4 Structured/enumeration types
+
+- **tag**: a kebab-case string identifier scoped to a geometry.
+  - May be empty to mean “unreferenceable”.
+- **euler**: a `vec3` interpreted as Euler angles (exact axis order/units TBD).
+- **tapkind**: one of `{primary|secondary}`.
+- **sizemode**: one of `{stretch|cover|contain|fixed-width|fixed-height}`.
+- **billboard**: one of `{fixed|y|xy}`.
+- **anchor**: one of `{top|center|bottom}-{left|center|right}`.
+
+---
+
+## 5) Error handling model (non-normative guidance)
+
+HackVR is failure-permissive:
+
+- Unknown/invalid commands: ignore.
+- Missing IDs (unknown object/geom/intent): ignore.
+- Missing assets or hash mismatch: show error placeholder and continue.
+- Network interruption: the viewer may present a resume/reconnect option as described in **2.1.3**, but must continue showing the last scene.
+
+Rationale:
+
+- Matches the intended social/exploration “fun and leisure” use cases.
+- Avoids leaking information via detailed error messages.
+
+---
+
+## 6) Implementation limits (anti-DoS guidance)
+
+Clients should enforce reasonable soft limits (reference values):
+
+- Selector expansion: **1,000 values** maximum per command
+- Triangle count per geometry: **100,000 triangles**
+- Object count: **10,000 objects**
+- Object nesting depth: **16 levels**
+- Command rate: **1,000 commands/sec**
+
+Specialized clients may tune these values.
+
+---
+
+## 7) Open topics to define properly
+
+### Geometry and transforms
+
+- Exact Euler axis/order/units and handedness/sign conventions.
+- Interpolation edge cases: shortest-path rotation, scale interpolation details.
+
+### Billboards
+
+- Text layout details (wrapping, alignment, overflow) beyond the “fit/contain” requirement.
+- Text styling model (links, underline, outline, etc.), if any is protocol-level.
+
+### Assets, security, and navigation
+
+- Transport profiles for assets (exact allowed schemes per world source).
+- Caching strategy and optional `invalidate-url` command semantics.
+- Sandboxing boundaries for navigation and cross-world capabilities.
+
+### Interaction UX
+
+- Viewer presentation guidelines for intents (menus, keybinds, ordering).
+- `request-input` UX details (e.g., whether cancellation must be possible).
+- Rate limiting recommendations for `set-banner` and other UI-affecting commands.
+
+### Selectors and batching
+
+- Exactly which commands accept selectors (current stance: commands that take `object`, `geom`, or `tag` parameters are marked with `[]`).
+
