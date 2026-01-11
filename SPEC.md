@@ -748,7 +748,6 @@ Camera orientation:
 - `rot:euler` uses the same **Pan/Tilt/Roll** convention as object transforms (see **3.6.2 Rotation semantics**).
 - The camera’s view direction and up vector are derived from this orientation (i.e., roll is meaningful).
 
-
 Tracking computation (in parent space, using local axes):
 
 - `plane`: rotate about local up axis so forward points toward projection of vector to target on plane orthogonal to local up.
