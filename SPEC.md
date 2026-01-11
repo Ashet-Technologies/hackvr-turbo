@@ -616,6 +616,8 @@ Parenting / Scene Graph:
 
 ### 3.6.1 Object commands
 
+### 3.6.1 Object commands
+
 Lifecycle and hierarchy:
 
 - **S→C** `create-object <obj:[]object> [<g:geom>]`
@@ -740,6 +742,12 @@ Tracking replaces billboard modes. It applies a rotation layer that can aim obje
 Transform chain:
 
 - `T_world(obj) = parent ∘ pos ∘ R_track ∘ R_local ∘ scale`
+
+Camera orientation:
+
+- `rot:euler` uses the same **Pan/Tilt/Roll** convention as object transforms (see **3.6.2 Rotation semantics**).
+- The camera’s view direction and up vector are derived from this orientation (i.e., roll is meaningful).
+
 
 Tracking computation (in parent space, using local axes):
 
