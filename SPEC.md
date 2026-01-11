@@ -66,15 +66,15 @@ stream    = { command } ;
 
 command   = name , { TAB , param } , CR , LF ;
 
-name      = sequence ;
-param     = sequence ;
+name      = { name_char } ;
+param     = { param_char } ;
 
-sequence  = { char } ;
+(* name_char disallows all Cc control characters (including LF). *)
+name_char = ? any Unicode scalar value satisfying: (char not-in Cc) ? ;
 
-(* char is any Unicode scalar value except Cc control characters,
-   with the special exception that LF is allowed; CR and TAB are not allowed. *)
-char      = ? any Unicode scalar value satisfying:
-              (char == LF) OR (char not-in Cc AND char != CR AND char != TAB) ? ;
+(* param_char disallows all Cc control characters, with the special exception that LF is allowed. *)
+param_char = ? any Unicode scalar value satisfying:
+               (char == LF) OR (char not-in Cc) ? ;
 ```
 
 Additional notes:
@@ -82,6 +82,7 @@ Additional notes:
 - `name` should be **non-empty**.
 - `TAB` is a separator, so it cannot appear inside `name` or `param`.
 - `CR` is not permitted anywhere except as part of the line terminator `CRLF`.
+- Because `CR` is forbidden inside `name`/`param`, `CRLF` is an unambiguous command terminator; a bare `LF` does **not** terminate a command.
 
 #### 2.1.2 Escaping
 
@@ -126,7 +127,7 @@ After a successful upgrade, the connection switches to the HackVR line protocol.
 ### Conventions
 
 - `<name:type>` denotes a typed argument.
-- `<name:[]type>` means the argument supports **selectors/globbing** (see **3.9 Selectors and globbing**).
+- `<name:[]type>` means the argument supports **selectors/globbing** (see **3.8 Selectors and globbing**).
 - `[...]` optional, `{...}` repeated 0+ times.
 
 Optional parameters may be:
@@ -134,10 +135,17 @@ Optional parameters may be:
 - **Omitted** (fewer parameters in the command)
 - **Present but empty** (consecutive TABs)
 
-Example: the following both match `foo [<bar:string>] [<bam:string>]`, and in both cases `bar=""` and `bam=""`:
+Example: the following all match `foo [<bar:zstring>] [<bam:zstring>]`:
 
 - `foo<CR><LF>`
+- `foo<TAB><CR><LF>`
 - `foo<TAB><TAB><CR><LF>`
+
+Mappings:
+
+- `foo<CR><LF>` → `bar=null`, `bam=null`
+- `foo<TAB><CR><LF>` → `bar=""`, `bam=null`
+- `foo<TAB><TAB><CR><LF>` → `bar=""`, `bam=""`
 
 Direction:
 
@@ -147,7 +155,7 @@ Direction:
 
 ### 3.1 Chat
 
-- **↔** `chat <user:userid> <message:string>`
+- **↔** `chat [<user:userid>] <message:string>`
   - Server→client must include a user.
   - Client→server may use an empty user.
 
@@ -168,7 +176,7 @@ Identity:
 Password challenge/response (if required by the server):
 
 - **S→C** `request-authentication <user:userid> <salt:bytes[16]>`
-- **C→S** `authenticate <user:userid> <pwhash:bytes[N]>`
+- **C→S** `authenticate <user:userid> <pwhash:bytes>`
 
 Authentication guidance:
 
@@ -201,7 +209,7 @@ Session token guidance:
   - Viewer: closes the modal if it is still open.
   - Server: should ignore if the input was already completed.
 
-- **C→S** `send-input <id:input> [<text:string>]`
+- **C→S** `send-input <id:input> <text:zstring>`
   - Sends the entered text.
   - Empty text is allowed and does **not** mean cancel.
   - If a viewer supports “cancel”, it should use `cancel-input`.
@@ -222,8 +230,9 @@ Client-originated interaction events do **not** use selectors/globbing.
 - **C→S** `tap-object <obj:object> <kind:tapkind> <tag:tag>`
   - Reports a pick on `<obj>` at the semantic triangle tag.
   - Tapping always targets **user-visible geometry** (what the viewer is actually rendering).
+  - If the hit triangle tag is empty (unreferenceable), the viewer should treat it as non-interactive (i.e., do not send `tap-object`).
 
-- **C→S** `tell-object <obj:object> [<text:string>]`
+- **C→S** `tell-object <obj:object> <text:zstring>`
   - Text sent to an object marked `textinput`.
   - Text may be empty.
 
@@ -259,13 +268,15 @@ Raycasts do **not** have a “hit world.” They merely inform the server of **d
 
 - **S→C** `raycast-request`
   - Enter raycast mode (viewer shows a crosshair/cursor; disables object/tag picking UI).
-- **S→C** `raycast-cancel`
+- **↔** `raycast-cancel`
   - Exit raycast mode without selection.
+  - C→S: user canceled the selection.
+  - S→C: server canceled a pending request.
 - **C→S** `raycast <origin:vec3> <dir:vec3>`
   - User clicked while in raycast mode; viewer sends ray origin (camera position) and direction.
   - The click terminates raycast mode on the client.
 
-### 3.6 Geometry management
+### 3.5 Geometry management
 
 Geometries are a **reusable visual representation** that can be attached to objects.
 
@@ -283,15 +294,15 @@ Lifecycle:
   - Creates a **triangle soup** geometry (the default geometry kind).
 - **S→C** `destroy-geometry <id:[]geom>`
 
-#### 3.6.1 Triangle Soups (default geometry)
+#### 3.5.1 Triangle Soups (default geometry)
 
 Triangle soups are the default geometry type.
 
 Triangle creation (tag-aware):
 
-- **S→C** `add-triangle-list  <id:[]geom> <tag:[]tag> { <color:color> <p0:vec3> <p1:vec3> <p2:vec3> }`
-- **S→C** `add-triangle-strip <id:[]geom> <tag:[]tag> <color:color> <p0:vec3> <p1:vec3> <p2:vec3> { <pos:vec3> }`
-- **S→C** `add-triangle-fan   <id:[]geom> <tag:[]tag> <color:color> <p0:vec3> <p1:vec3> <p2:vec3> { <pos:vec3> }`
+- **S→C** `add-triangle-list  <id:[]geom> <tag:tag> { <color:color> <p0:vec3> <p1:vec3> <p2:vec3> }`
+- **S→C** `add-triangle-strip <id:[]geom> <tag:tag> <color:color> <p0:vec3> <p1:vec3> <p2:vec3> { <pos:vec3> }`
+- **S→C** `add-triangle-fan   <id:[]geom> <tag:tag> <color:color> <p0:vec3> <p1:vec3> <p2:vec3> { <pos:vec3> }`
 
 Tag semantics:
 
@@ -311,7 +322,7 @@ Picking/occlusion note:
 - Hit priority is front-to-back by depth.
 - Tagged triangles behind untagged, fully opaque geometry are not clickable.
 
-#### 3.6.2 Text Billboards
+#### 3.5.2 Text Billboards
 
 Text billboards are flat rectangles rendered in the world.
 
@@ -342,7 +353,7 @@ Guidance:
 
 - For complex changes (font, billboard mode, anchor, sizing model), servers should destroy and recreate the text geometry.
 
-#### 3.6.3 Image Billboards
+#### 3.5.3 Image Billboards
 
 Image billboards are flat rectangles rendered in the world.
 
@@ -376,7 +387,7 @@ Depth testing:
 
 - Billboards depth-test like opaque geometry.
 
-### 3.7 Object management (scene graph)
+### 3.6 Object management (scene graph)
 
 Objects have transform (position/orientation/scale) and may reference a geometry.
 
@@ -391,7 +402,7 @@ Default parenting:
 
 Lifecycle and hierarchy:
 
-- **S→C** `create-object <obj:[]object> [<g:[]geom>]`
+- **S→C** `create-object <obj:[]object> [<g:geom>]`
 - **S→C** `destroy-object <obj:[]object>`
 - **S→C** `add-child <parent:object> <child:[]object> [<space:string>]`
   - `space` is `world` (default) or `local`.
@@ -435,7 +446,7 @@ Rotation semantics:
 - Interpolation is performed in quaternion space derived from Euler.
 - Exact Euler axis/order/units are open topics.
 
-### 3.8 Views and camera control
+### 3.7 Views and camera control
 
 HackVR does not expose named views. The server directly sets the viewer’s camera pose.
 
@@ -454,11 +465,11 @@ Background:
 
 - **S→C** `set-background-color <color:color>`
   - Sets the viewer background color for the world.
-  - Default background color is `000080` (i.e. `#000080`).
+  - Default background color is `#000080`.
 
 ---
 
-### 3.9 Selectors and globbing
+### 3.8 Selectors and globbing
 
 HackVR supports selector syntax for **batching** and **semantic matching**.
 
@@ -475,6 +486,10 @@ General operation:
 - A selector expands to **zero or more concrete values**.
 - If a selector expands to zero values, the command becomes a no-op.
 - **No deterministic expansion order is required**; commands must not depend on selector expansion order.
+
+Multiple selector parameters:
+
+- If a command contains multiple selector parameters, each selector is expanded independently and the command is applied to the **cartesian product** of expansions.
 
 Creation + selectors:
 
@@ -504,13 +519,15 @@ Globbing syntax:
 
 ### 4.1 Primitive types
 
-- **string**: UTF-8 text. May be empty.
+- **string**: UTF-8 text. Must have at least a single character. Empty is only allowed if optional.
+- **zstring**: UTF-8 text. May be empty.
 - **float**: decimal floating point, must be non-empty.
 - **bool**: `true` or `false`, must be non-empty.
 - **int**: decimal integer, must be non-empty.
 - **vec2**: `(<x:float> <y:float>)`, must be non-empty.
 - **vec3**: `(<x:float> <y:float> <z:float>)`, must be non-empty.
 - **color**: `#RRGGBB` (24-bit), must be non-empty.
+- **bytes**: hex-encoded bytes (even number of hex chars), must be non-empty.
 - **bytes[N]**: fixed-length hex-encoded bytes of length N (2N hex chars), must be non-empty.
 
 ### 4.2 Optional parameter mapping
@@ -519,7 +536,7 @@ For an optional parameter `[<x:type>]`:
 
 - If the parameter is **omitted**, it maps to **absent/null**.
 - If the parameter is **present but empty**:
-  - For `string`, it maps to the **empty string** `""`.
+  - For `zstring`, it maps to the **empty string** `""`.
   - For all other types, it maps to **absent/null**.
 
 ### 4.3 Identifier types
@@ -562,7 +579,7 @@ Rationale:
 
 Clients should enforce reasonable soft limits (reference values):
 
-- Selector expansion: **1,000 values** maximum per command
+- Selector expansion: **1,000 concrete command applications** maximum per command (after any multi-selector expansion)
 - Triangle count per geometry: **100,000 triangles**
 - Object count: **10,000 objects**
 - Object nesting depth: **16 levels**
@@ -599,4 +616,3 @@ Specialized clients may tune these values.
 ### Selectors and batching
 
 - Exactly which commands accept selectors (current stance: commands that take `object`, `geom`, or `tag` parameters are marked with `[]`).
-
