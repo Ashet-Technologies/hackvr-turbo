@@ -15,13 +15,15 @@ Goals:
 - **Low barrier to creation:** a server can generate worlds by writing lines to a stream.
 - **Server-authoritative world state:** the server owns scene state; the client renders and reports user interactions.
 - **Hyperlinkable worlds:** objects can link to other worlds.
-- **Minimal primitives, lots of composition:** geometries + objects + billboards + verbs (“intents”) + picking/raycast input.
-- **Optimistic by design:** invalid commands, missing entities, or missing assets should degrade gracefully (ignore, show placeholders) rather than fail hard.
+- **Minimal primitives, lots of composition:** geometries + objects + tracking + verbs (“intents”) + picking/raycast input.
+- **Optimistic by design:** after connection establishment, invalid commands, missing entities, or missing assets should degrade gracefully (ignore, show placeholders) rather than fail hard.
 
 Non-goals:
 
 - **No keyframe animation system:** only best-effort transform transitions.
 - **No continuous interaction primitives:** no drag/hold/analog streams; interactions are discrete events (taps, intents, text submission, ray input).
+
+**Strict failure rules apply only during connection establishment handshakes** (raw `hackvr-hello` and HTTP Upgrade). After establishment, the protocol uses optimistic error handling.
 
 ### 1.1 Conceptual operations vs exact state
 
@@ -67,6 +69,10 @@ Control characters are forbidden except:
 
 - **TAB** (argument separator)
 - **LF** (may appear *inside* a parameter to represent a newline)
+
+Lines with invalid UTF-8, stray CR, or other framing violations are **command errors** and shall be ignored after establishment.
+
+Receivers should apply a conservative **line length limit** (e.g., ~1024 bytes including CRLF); exceeding it is treated as a command error. This is guidance only and must not prevent geometry streaming (servers must split into multiple lines).
 
 #### 2.1.1 Formal grammar (EBNF)
 
@@ -114,13 +120,17 @@ If the stream ends:
 
 - The viewer **must keep showing the current scene**.
 - The viewer **must inform the user** that the connection was closed.
-- If a session token was provided, the viewer **may offer automatic session resumption**.
-- If no token was provided, the viewer **may offer a reconnect**.
+- The viewer **must not automatically reconnect** in any case.
+- Any (re)connection attempt must be an explicit **user action**.
 
 ### 2.2 URL schemes
 
-- `hackvr://` (non-TLS)
-- `hackvrs://` (TLS)
+Normative mappings:
+
+- `hackvr://` = raw TCP, unencrypted; HackVR starts after `hackvr-hello`.
+- `hackvrs://` = raw TCP + TLS 1.2/1.3 or later; HackVR starts after TLS + `hackvr-hello`.
+- `http+hackvr://` = HTTP/1.1 Upgrade over HTTP.
+- `https+hackvr://` = HTTP/1.1 Upgrade over HTTPS.
 
 ### 2.3 Default network path: HTTP/1.1 Upgrade
 
@@ -133,9 +143,55 @@ GET /world HTTP/1.1
 Host: example.com
 Connection: upgrade
 Upgrade: hackvr
+HackVr-Version: v1
 ```
 
-After a successful upgrade, the connection switches to the HackVR line protocol.
+Required success criteria:
+
+- Server responds with **`101 Switching Protocols`**.
+- Response includes `Connection: upgrade` and `Upgrade: hackvr` (case-insensitive).
+
+After a successful upgrade, the HackVR command stream begins **immediately after the HTTP headers** (after the blank line).
+
+Failure handling:
+
+- Viewer must display failure to the user.
+- If the server returns **2xx**, the viewer should display the plaintext response body for debugging.
+
+Version signaling:
+
+- The protocol version is carried via the HTTP header `HackVr-Version: v1`.
+- HTTP profile currently pins to `v1` (negotiation is defined in the raw handshake section).
+
+Redirect binding:
+
+- Session/origin binding for HTTP uses **the request that finally opens the HackVR connection** (the final request that successfully upgraded).
+
+### 2.4 Connection establishment — raw handshake (`hackvr-hello`)
+
+Raw `hackvr(s)://` connections perform a strict handshake before any other commands.
+
+Handshake commands:
+
+- **C→S** `hackvr-hello <max-version:version> <uri:uri> [<session-token:session-token>]`
+  - `uri` must not contain a fragment; viewers may extract the fragment as a session token before connecting.
+- **S→C** `hackvr-hello <max-version:version>`
+
+Version negotiation:
+
+- Versions match `/v[1-9][0-9]*/`; parse the integer suffix and choose the **minimum** of client/server.
+- Parse failure or unsupported effective version => close connection; viewer should inform user, server may log.
+
+Strictness:
+
+- Both sides must send `hackvr-hello` immediately after connect.
+- The first received line must be `hackvr-hello`; otherwise close.
+- No other commands are allowed pre-hello.
+- After the hello exchange, the protocol enters optimistic mode.
+
+Connect-time session token behavior:
+
+- If a client hello includes a `session-token`, it is treated as if the client sent `resume-session <token>` as the first client action.
 
 ---
 
@@ -170,11 +226,18 @@ Direction:
 - **C→S** client to server
 - **↔** either direction
 
+Type validation may be stricter than framing. For example, framing permits LF inside parameters, but types such as `userid` and `uri` forbid LF. Type violations are command errors (ignored after establishment).
+
+After establishment, unknown/invalid commands are ignored (optimistic model), not connection-fatal.
+
 ### 3.1 Chat
 
-- **↔** `chat [<user:userid>] <message:string>`
-  - Server→client must include a user.
-  - Client→server may use an empty user.
+- **S→C** `chat <user:userid> <message:string>`
+  - Server must always include user.
+- **C→S** `chat <message:string>`
+  - Viewer omits the user field; server ignores any user field if present.
+
+`message` must be a non-empty `string`; empty chat messages should be omitted rather than sent.
 
 ### 3.2 Authentication and sessions
 
@@ -186,10 +249,8 @@ Concepts:
 
 - A connection may have an assigned `userid` (including `$anonymous`), and it may change over time.
 - A `userid` may be protected by an identity.
-- A session token can be established with or without a stable `userid`.
+- Session tokens are **session identifiers/context hints**, not authentication credentials.
 - Authentication implies a `userid` (i.e., there is nothing to authenticate without a claimed `userid`).
-
-In other words: `userid`, authentication, and session tokens are related but orthogonal.
 
 Security notes:
 
@@ -204,19 +265,8 @@ Auth model:
 Constraints:
 
 - `$anonymous` is a reserved `userid` value and can be used with session tokens (no stable username).
-- Session tokens must not be persistet to disk and may live in the server process only.
-  - If still required by implementation, only a hash of the token shall be stored.
 
-Control flow (typical):
-
-- The server may ask for a name via `request-user`. The viewer may also proactively send `set-user` (IRC-style).
-- After `set-user`, the server either:
-  - accepts immediately via `accept-user` (unprotected name), or
-  - challenges via `request-authentication` and then accepts/rejects based on `authenticate`, or
-  - rejects via `reject-user`.
-- `resume-session` is independent of naming; the server may accept, reject, or require re-authentication before accepting.
-
-#### 3.2.2 Commands
+#### 3.2.2 Authentication commands
 
 - **S→C** `request-user [<prompt:zstring>]`
   - Ask the viewer to provide or change a `userid` for this connection.
@@ -225,36 +275,85 @@ Control flow (typical):
 - **C→S** `set-user <user:userid>`
   - Attempts to set (or change) the `userid` for the connection.
   - The server responds with `request-authentication`, `accept-user`, or `reject-user`.
-  - If a user authentication was already established, this command shall invalidate that authentication in any case.
-  - This command always invalidates a previously established session token provided by `accept-user`.
-  - If user is `$anonymous`, the server must always respond with `accept-user`.
+  - If `user` is `$anonymous`, the server must always respond with `accept-user`.
 
 - **S→C** `request-authentication <user:userid> <nonce:bytes[16]>`
   - Requests proof of key ownership for `user`.
   - `nonce` must be generated from a cryptographic randomness source and must be single-use.
   - The server must invalidate the nonce after 60 seconds.
   - Invalidates any previous `request-authentication` including their `nonce`.
+  - `nonce` may be upper/lowercase hex on wire; receivers accept both.
 
 - **C→S** `authenticate <user:userid> <signature:bytes[64]>`
   - `signature` is an Ed25519 signature over the UTF-8 string `hackvr-auth-v1:<user>:<nonce>`.
     - `<user>` and `<nonce>` must match the last `request-authentication` for that connection.
-    - `<nonce>` is the hex-encoded string as seen in `request-authentication` and must use the same upper/lower case text.
+    - `<nonce>` must be **canonical lowercase hex** when used in the signing string.
+  - No string normalization occurs; viewers sign exactly what they received, after canonical lowercase conversion of `nonce`.
 
-- **S→C** `accept-user <user:userid> [<session-token:string>]`
+- **S→C** `accept-user <user:userid>`
   - Indicates that `user` is accepted for the connection.
-  - If provided, `session-token` is an opaque bearer token the viewer may store to resume after a connection loss.
-  - If no `session-token` is provided, the session cannot be resumed by `resume-session`.
-  - Token guidance: cryptographically random (128+ bits) and time-limited (e.g., ~1 hour).
-  - The server may send `accept-user` again to rotate/refresh the token.
-  - `accept-user $anonymous <session-token:string>` can be used to provide resumable sessions without a stable `userid`.
 
 - **S→C** `reject-user <user:userid> [<reason:zstring>]`
-  - Rejects `user` for the connection (naming, authentication attempt, or session resumption).
+  - Rejects `user` for the connection (naming or authentication attempt).
   - If authentication is enabled, the `reason` should be non-specific (avoid “invalid user” vs “invalid signature”).
 
-- **C→S** `resume-session <user:userid> <session-token:string>`
-  - Requests resumption of a previous session.
-  - The server may require re-authentication via `request-authentication`.
+State-machine closure:
+
+- After **C→S** `authenticate`, the server must respond with exactly one of:
+  - **S→C** `accept-user ...` (success) or
+  - **S→C** `reject-user ...` (failure).
+- After `reject-user`, the viewer may restart with `set-user` again.
+
+#### 3.2.3 Sessions (non-authentication)
+
+Session tokens identify server-side state (think “savegame id”), not identity.
+
+- Tokens may be shared across viewers.
+- Tokens are **not invalidated by use**; multiple connections may resume the same token if server allows (e.g., lobby/instance).
+- The server must not treat possession of a token as authentication; access control requires separate logic.
+- Tokens may expire; servers should revoke when feasible.
+
+Commands:
+
+- **S→C** `announce-session <token:session-token>`
+  - Sets/refreshes the token associated with the current connection context.
+  - If token differs from the previously announced token for this connection, the previously announced token becomes invalid (revoked for this connection).
+  - If token is the same as previously announced, refreshes/extends lifetime.
+- **S→C** `revoke-session <token:session-token>`
+  - Informs viewer that token is no longer valid/usable (server/world-wide invalidity).
+- **C→S** `resume-session <token:session-token>`
+  - Semantics are server-defined: may restore state, switch lobbies, be idempotent or not; client should rely on scene updates and `set-banner` for user feedback.
+
+Establishment-time token carriage:
+
+- For raw `hackvr(s)://`: optional session token parameter in client `hackvr-hello`.
+- For HTTP upgrade: HTTP request header `HackVr-Session: <session-token>`.
+- An establishment token is treated as if the client sent `resume-session <token>` as the **first client action**.
+
+World-state baseline:
+
+- The protocol assumes empty/default world state on connection.
+- Session resumption does not assume any client-retained scene; server must recreate scene explicitly if desired.
+
+Context scope:
+
+- “Connection/session context” means the lifetime of the transport connection (open→close).
+- Rotation/refresh semantics for `announce-session` are defined with respect to the connection context.
+- `resume-session` does not create a new context.
+
+Token encoding rules:
+
+- Session tokens are base64url without padding, decode to exactly 32 bytes, encoded length 44 chars, compared by decoded bytes.
+
+URL fragment as session token (viewer convenience):
+
+- For HackVR URLs, fragment `#<token>` is interpreted as a session token and injected into the connect-time token parameter/header.
+- Fragment is not transmitted as part of `uri` on wire; it is viewer-side parsing only.
+
+Session/origin binding:
+
+- Session tokens are same-origin bound using handshake-derived `(domain, port, path, query)` for raw connections and `Host + request-target` for HTTP.
+- URI fragments are ignored for binding.
 
 ### 3.3 Graphical Interface
 
@@ -264,21 +363,25 @@ Control flow (typical):
   - Server requests text from the user.
   - `prompt` tells the user what is expected from them.
   - If `default` is given, it may be hinted to the user or be already prefilled.
+  - A new `request-input` replaces any previous active request-input.
+  - The viewer shall not clear the current user draft when replacing (keeps draft).
+  - `request-input` is orthogonal to `request-user`; both may be active.
 
 - **S→C** `cancel-input`
-  - Aborts the previous `request-input`, if any.
+  - Cancels the previous `request-input` (idempotent; no-op if none active).
 
 - **C→S** `send-input <text:zstring>`
   - Sends the entered text.
   - Empty text is allowed and does **not** mean cancel.
-  - If a viewer supports “cancel”, it should use `cancel-input`.
+
+Correlation between `request-input` and `send-input` is server-side only; there is no protocol correlation id.
 
 #### 3.3.2 Banner
 
-- **S→C** `set-banner <text:string> [<t:float>]`
+- **S→C** `set-banner <text:[string]> [<t:float>]`
   - Show informational text to the user.
-  - Empty text clears.
-  - If `t` is provided, auto-hide after `t` seconds.
+  - Empty/absent text clears.
+  - If `t` is provided, auto-hide after `t` seconds (`t` must be ≥ 0).
 
 ### 3.4 World Interaction
 
@@ -289,7 +392,8 @@ Client-originated interaction events do **not** use selectors/globbing.
 - **C→S** `tap-object <obj:object> <kind:tapkind> <tag:tag>`
   - Reports a pick on `<obj>` at the semantic triangle tag.
   - Tapping always targets **user-visible geometry** (what the viewer is actually rendering).
-  - If the hit triangle tag is empty (unreferenceable), the viewer should treat it as non-interactive (i.e., do not send `tap-object`).
+  - If the hit triangle tag is empty (unreferenceable), the viewer must not send `tap-object`.
+  - Viewer must not send `tap-object` for objects with `clickable=false`.
 
 - **C→S** `tell-object <obj:object> <text:zstring>`
   - Text sent to an object marked `textinput`.
@@ -297,7 +401,7 @@ Client-originated interaction events do **not** use selectors/globbing.
 
 #### 3.4.2 Intents (verbs / actions)
 
-Default intents that always exist:
+Default intents that are **predefined and initially present** on connect:
 
 - `$forward`: "Move forward"
 - `$back`: "Move backward"
@@ -307,15 +411,17 @@ Default intents that always exist:
 - `$down`: "Move down"
 - `$stop`: "Stop movement"
 
+These intents may be destroyed and recreated. Viewers may display destroyed predefined intents as disabled UI controls for layout consistency, but must not emit `intent` for non-existent intents.
+
 Additional intents can be defined dynamically:
 
 - **S→C** `create-intent <id:intent> <label:string>`
   - Add an extra intent the viewer can present (button, menu, keybind, radial menu, etc.).
   - If an intent with the name `id` already exists, changes its label.
-    - This also includes the default intents.
+    - This also includes the predefined intents (upsert).
 - **S→C** `destroy-intent <id:intent>`
   - Remove an intent.
-  - This also includes the default intents.
+  - This also includes the predefined intents.
 
 Triggering an intent:
 
@@ -334,6 +440,15 @@ Raycast mode is a **temporary override** of picking mode: the server requests it
 
 Raycasts do **not** have a “hit world.” They merely inform the server of **directional input**; the viewer does not compute intersections and does not send hit results.
 
+Raycast mode state:
+
+- `raycast-request` sets `raycast_mode = true` (idempotent).
+- `raycast-cancel` sets `raycast_mode = false` (idempotent).
+- `raycast` must only be sent when `raycast_mode` was true; it sets `raycast_mode = false` before emitting.
+- Multiple `raycast-request` do not queue rays; they just keep mode true until one ray or cancel.
+
+Commands:
+
 - **S→C** `raycast-request`
   - Enter raycast mode (viewer shows a crosshair/cursor; disables object/tag picking UI).
 - **↔** `raycast-cancel`
@@ -349,7 +464,7 @@ Raycasts do **not** have a “hit world.” They merely inform the server of **d
 Geometries are a **reusable visual representation** that can be attached to objects.
 
 - A geometry is identified by `<id:geom>`.
-- A geometry’s concrete kind is defined by how it was created (triangle soup vs text billboard vs image billboard).
+- A geometry’s concrete kind is defined by how it was created (triangle soup vs text geometry vs sprite geometry).
 - There are no geometry queries, so servers should maintain canonical state for runtime edits.
 
 Predefined:
@@ -364,6 +479,7 @@ Lifecycle:
 
 - **S→C** `create-geometry <g:[]geom>`
   - `g` cannot be `$global`.
+  - Duplicate create targets are invalid and ignored.
 - **S→C** `destroy-geometry <g:[]geom>`
   - `g` cannot be `$global`.
   - If an object has `g` assigned, the objects geometry will be unset.
@@ -374,10 +490,20 @@ Triangle creation (tag-aware):
 - **S→C** `add-triangle-strip <id:[]geom> [<tag:tag>] <color:color> <p0:vec3> <p1:vec3> <p2:vec3> { <pos:vec3> }`
 - **S→C** `add-triangle-fan   <id:[]geom> [<tag:tag>] <color:color> <p0:vec3> <p1:vec3> <p2:vec3> { <pos:vec3> }`
 
+Strip/fan construction:
+
+- Triangle strip: each new vertex `pos` forms triangle `(seq[n-2], seq[n-1], pos)`.
+- Triangle fan: each new vertex `pos` forms triangle `(seq[0], seq[n-1], pos)`.
+
+Color semantics:
+
+- `add-triangle-strip` and `add-triangle-fan` apply **one color per invocation** (single color for all triangles produced).
+- If per-triangle color is needed, servers must use `add-triangle-list`.
+
 Tag semantics:
 
 - Tags are scoped to a geometry.
-- Tags are **kebab-case strings** intended to be self-documenting (`door-entrance`, `enemy-goblin-03`, `ui-button-start`).
+- Tags are **dash-grouped identifiers** intended to be self-documenting (`door-entrance`, `enemy-goblin-03`, `ui-button-start`).
 - Empty tag means **unreferenceable** (cannot be tapped, cannot be deleted).
 - Triangles with the same tag are semantically identical; no triangle index exists at the protocol level.
 
@@ -386,56 +512,66 @@ Triangle removal (by tag match / selector):
 - **S→C** `remove-triangles <id:[]geom> <tag:[]tag>`
   - Removes all triangles in `<id>` whose tag matches `<tag>`.
 
+Winding/culling/picking:
+
+- Winding order does not matter; no backface culling.
+- Triangles are visible and pickable from both sides.
+
 Picking/occlusion note:
 
 - Tapping always targets **user-visible geometry**.
 - Hit priority is front-to-back by depth.
 - Tagged triangles behind untagged, fully opaque geometry are not clickable.
 
-#### 3.5.2 Text Billboards
+Untagged permanence:
 
-Text billboards are flat rectangles rendered in the world.
+- Empty/missing tag is unreferenceable and intentionally non-removable/non-tappable.
+- `remove-triangles` can only remove tagged triangles.
+- Selector `*` matches all **tagged** triangles; untagged remain permanent.
 
-- **S→C** `create-text-geometry <id:[]geom> <size:vec2> <font-uri:string> <font-sha256:bytes[32]> <text:string> [<anchor:anchor>] [<billboard:billboard>]`
+#### 3.5.2 Text geometries
+
+Text geometries are flat rectangles rendered in the world.
+
+- **S→C** `create-text-geometry <id:[]geom> <size:vec2> <font-uri:uri> <font-sha256:bytes[32]> <text:string> [<anchor:anchor>]`
   - `id` cannot be `$global`.
 
 Defaults:
 
 - `anchor` defaults to `center-center`.
-- `billboard` defaults to `fixed`.
 
 Text fitting:
 
-- The viewer should render text so it **fits inside** the billboard rectangle ("contain").
+- The viewer should render text so it **fits inside** the rectangle ("contain").
 
-Billboard hit-testing:
+Hit-testing:
 
-- Billboards are always treated like **two triangles forming a rectangle**.
-- Billboards are **never hit-test transparent**.
+- Text geometries are always treated like **two triangles forming a rectangle**.
+- They are **never hit-test transparent**.
 
-Mutable text properties (common updates):
+Mutable text properties (typed):
 
-- **S→C** `set-text-property <id:[]geom> <property:string> <value:string>`
-  - Common properties:
-    - `text` (string)
-    - `color` (`#RRGGBB`)
+- **S→C** `set-text-property <id:[]geom> <property:string> <value:any>`
+  - `text: string` (non-empty)
+  - `color: color`
+
+Empty handling is based on the expected type (see `any` rules).
 
 Guidance:
 
-- For complex changes (font, billboard mode, anchor, sizing model), servers should destroy and recreate the text geometry.
+- For complex changes (font, anchor, sizing model), servers should destroy and recreate the text geometry.
 
-#### 3.5.3 Image Billboards
+#### 3.5.3 Sprite/image geometries
 
-Image billboards are flat rectangles rendered in the world.
+Sprite geometries are flat rectangles rendered in the world.
 
-- **S→C** `create-sprite-geometry <id:[]geom> <size:vec2> <uri:string> <sha256:bytes[32]> [<size-mode:sizemode>] [<anchor:anchor>] [<billboard:billboard>]`
+- **S→C** `create-sprite-geometry <id:[]geom> <size:vec2> <uri:uri> <sha256:bytes[32]> [<size-mode:sizemode>] [<anchor:anchor>]`
   - `id` cannot be `$global`.
 
 Defaults:
 
 - `size-mode` defaults to `stretch`.
 - `anchor` defaults to `center-center`.
-- `billboard` defaults to `fixed`.
 
 Size mode semantics:
 
@@ -445,19 +581,22 @@ Size mode semantics:
 - `fixed-width`: preserve aspect ratio; width = `size.x`, height derived.
 - `fixed-height`: preserve aspect ratio; height = `size.y`, width derived.
 
-Billboard hit-testing:
+Hit-testing:
 
-- Billboards are always treated like **two triangles forming a rectangle**.
-- Billboards are **never hit-test transparent**.
+- Sprite geometries are always treated like **two triangles forming a rectangle**.
+- They are **never hit-test transparent**.
 
 Asset semantics:
 
 - Hash is over downloaded bytes.
-- Failure or hash mismatch displays an error placeholder.
+- Treat `(uri, sha256)` as distinct assets; same uri with different hash is different asset.
+- Viewer may cache by `(uri, hash)` or by hash only.
+- Hash mismatch or download failure shows placeholder and continues; retry strategy is viewer-defined but should avoid DoS.
+- Viewer provides fallback default font + image placeholder.
 
 Depth testing:
 
-- Billboards depth-test like opaque geometry.
+- Sprites depth-test like opaque geometry.
 
 ### 3.6 Object management (scene graph)
 
@@ -466,6 +605,7 @@ Objects have transform (position/orientation/scale) and may reference a geometry
 Predefined:
 
 - `object` **`$global`** exists at origin and has `$global` geometry attached.
+- `object` **`$camera`** exists always, cannot be destroyed, and defines the viewer camera transform.
 - `$global` is the **scene graph root** and **cannot be reparented**.
 
 Parenting / Scene Graph:
@@ -479,52 +619,62 @@ Parenting / Scene Graph:
 Lifecycle and hierarchy:
 
 - **S→C** `create-object <obj:[]object> [<g:geom>]`
-  - `obj` cannot be `$global`.
+  - `obj` cannot be `$global` or `$camera`.
+  - Duplicate create targets are invalid and ignored.
+  - Newly created objects default local transform: pos `(0 0 0)`, rot `(0 0 0)`, scale `(1 1 1)`.
 - **S→C** `destroy-object <obj:[]object>`
-  - `obj` cannot be `$global`.
-  - If the object has child objects in the scene graph, they will be reparented to `$global`.
+  - `obj` cannot be `$global` or `$camera`.
+  - If the object has child objects in the scene graph, they will be reparented to `$global` preserving world transform (equivalent to `reparent-object $global <child> world`).
 - **S→C** `reparent-object <parent:object> <child:[]object> [<transform:string>]`
   - `transform` is `world` (default) or `local`.
     - `world` keeps the world transformation of the object as-is
       - This implies the local coordinates of the object will change, but will not visually move.
     - `local` keeps the object’s local transformation as-is:
       - This means the object will potentially move visibly.
-  - `child` cannot be `$global`.
+  - `child` cannot be `$global` or `$camera`.
 
 Geometry attachment:
 
 - **S→C** `set-object-geometry <obj:[]object> [<g:geom>]`
   - Exactly one geometry is attached per object.
   - If `g` is absent, the object becomes invisible.
+  - Objects require visible rendered geometry to be interactable (tap/tell/href).
 
-Properties:
+Properties (typed):
 
-- **S→C** `set-object-property <obj:[]object> <property:string> <value:string>`
-  - Common properties:
-    - `href` (hyperlink)
-    - `clickable` (`true/false`)
-    - `textinput` (`true/false`)
+- **S→C** `set-object-property <obj:[]object> <property:string> <value:any>`
+  - `clickable: bool` — gates only `tap-object` emission.
+  - `textinput: bool` — gates only `tell-object` emission.
+  - `href: [string]` — optional; empty/unset removes href.
+    - `href` must be an absolute URI string (no relative).
+    - Viewer must confirm navigation and show full target including scheme.
+    - Unknown schemes delegated to OS default handler; HackVR schemes open as worlds.
 
-Navigation security (for `href`):
+Object properties do not inherit to children.
 
-- Viewers **must require explicit user confirmation** before navigating to an `href`.
-- Viewers should clearly display the full target (including scheme) during confirmation.
+Multi-action UX:
+
+- Viewer should present available interactions as a selection.
+- If exactly one interaction is available, viewer may perform it directly without selection UI.
 
 Transforms (with optional transition):
 
 - **S→C** `set-object-transform <obj:[]object> [<pos:vec3>] [<rot:euler>] [<scale:vec3>] [<t:float>]`
   - Sets the local object transformation relative to its parent.
+  - `duration = (t if provided else 0.0)`.
+  - `t` must be ≥ 0.
 
 Transition semantics:
 
 - Purpose: **best-effort visual smoothing**, not simulation.
 - Time base: viewer monotonic clock; no server timestamps.
 - Channels are independent (pos/rot/scale).
-- Updating a channel interrupts that channel and restarts from its current value.
-- Omitting a channel means its existing transition continues.
+- Updating a channel always cancels previous transition on that channel.
+- Omitted channel remains unchanged and continues its prior transition if any.
 - Guarantee: at the end of duration `t`, the object will be at the target transform.
 - During transition, motion is “close enough” for visual purposes; small drift due to jitter is acceptable.
 - Drift is bounded by the **longest active transition duration** (bounded, not cumulative).
+- `rot:euler` always applies to authored local rotation (`R_local`), independent of tracking rotation layer.
 
 Rotation semantics:
 
@@ -575,31 +725,46 @@ For transitions (`t` provided), the receiver should:
 - Interpolate using a shortest-path spherical interpolation (SLERP) or an equivalent method.
 - Apply the interpolated quaternion to produce the rendered orientation during the transition.
 
+### 3.6.4 Tracking (billboard replacement)
+
+Tracking replaces billboard modes. It applies a rotation layer that can aim objects at a target.
+
+- **S→C** `track-object <obj:[]object> [<target:object>] [<mode:track-mode>] [<t:float>]`
+  - `t` defaults to 0.0 and cancels prior tracking transition; `t` must be ≥ 0.
+  - If `target` omitted: disables tracking (tracking rotation becomes identity, with transition if `t>0`).
+  - If target missing at evaluation time: tracking is a no-op until it exists again.
+  - If `obj` is `$global`: command application ignored.
+  - If `target` equals `obj`: application ignored (no self-tracking).
+  - `$camera` is allowed as `obj` and can track other objects.
+
+Transform chain:
+
+- `T_world(obj) = parent ∘ pos ∘ R_track ∘ R_local ∘ scale`
+
+Tracking computation (in parent space, using local axes):
+
+- `plane`: rotate about local up axis so forward points toward projection of vector to target on plane orthogonal to local up.
+- `focus`: rotate local forward to point directly at target (with deterministic up-hint rules).
+
 ### 3.7 Views and camera control
 
-HackVR does not expose named views. The server directly sets the viewer’s camera pose.
+HackVR does not expose named views. The server moves the viewer’s camera via the `$camera` object.
 
-- **S→C** `set-view-transform [<pos:vec3>] [<rot:euler>] [<duration:float>]`
-  - Any omitted field remains unchanged.
-  - If `duration` is provided, transition the provided values over `duration` seconds, in the same manner as `set-object-transform`.
-  - If omitted, change immediately.
-- **S→C** `set-view-parent [<obj:object>]`
-  - Sets the camera local to `obj`.
-  - This implies the camera now treats `obj` effective coordinate system as the camera coordinate system
-    - This means all movement of the camera is now relative to `obj`.
-  - If `obj` is absent, `$global` will be used.
+- Server sets the camera pose with `set-object-transform $camera ...`.
+- `$camera` may have geometry attached (HUD-like geometry).
 
-Camera orientation:
-
-- `rot:euler` uses the same **Pan/Tilt/Roll** convention as object transforms (see **3.6.2 Rotation semantics**).
-- The camera’s view direction and up vector are derived from this orientation (i.e., roll is meaningful).
-
-Free-look control (disjoint from `set-view`):
+Free-look control:
 
 - **S→C** `enable-free-look <enabled:bool>`
   - When enabled, the viewer may allow immediate local pan/tilt rotation ("free look").
   - Viewers MAY also allow local roll control, but are not required to.
-  - When disabled, the viewer should not allow free-look rotation.
+  - When disabled, the viewer should not allow free-look rotation and resets `R_free = identity`.
+
+Camera orientation composition:
+
+- Rendered camera rotation `R_render = R_track($camera) ∘ R_local($camera) ∘ R_free`.
+- Disabling free-look resets `R_free = identity`.
+- Changing `$camera` transform does not disable free-look; free-look remains an additive local offset when enabled.
 
 Background:
 
@@ -636,22 +801,34 @@ Creation + selectors:
 - For commands that *create* entities, selectors are allowed **only as expansions**, not as wildcards.
   - Allowed: `{a,b,c}`, `{0..10}`, `{00..10}`
   - Not allowed in create commands: `*` or `?`
-- If a create command targets an ID that already exists, the receiver should **re-create** it (replace existing with a fresh instance).
+- Creation with selectors is equivalent to executing each expanded command individually.
+- For create targets that already exist, those applications are ignored; other expansions may still succeed.
 
 Selector-friendly naming:
 
-- IDs and tags are kebab-case “parts” separated by `-`, e.g. `cheese-01-fancypants`.
-- `$global` remains reserved.
+- IDs and tags are **dash-grouped identifiers** separated by `-`, e.g. `cheese-01-fancypants`.
+- `_` is part of a part; `-` is the part delimiter.
+- Reserved IDs start with `$` and are spec-defined.
 
 Globbing syntax:
 
-- `*` matches zero or more kebab parts
+- `*` matches zero or more parts
   - `cheese-*-done` matches `cheese-done`, `cheese-01-done`, `cheese-01-a-done`, ...
-- `?` matches exactly one kebab part
+  - `foo-*` matches `foo` as well.
+- `?` matches exactly one part
   - `cheese-?-done` matches `cheese-01-done` but not `cheese-done`
 - `{a,b,c}` expands to variants
 - `{0..10}` expands to `0..10`
 - `{00..10}` expands to `00..10` (zero-padded width inferred from endpoints)
+
+Reserved IDs in selectors:
+
+- Globbing includes reserved `$...` IDs unless excluded.
+- Reserved IDs that contain `-` split into parts as normal for matching.
+
+Bare `*` fast-path:
+
+- A selector parameter exactly `*` must expand fully (no truncation).
 
 ---
 
@@ -661,12 +838,14 @@ Globbing syntax:
 
 - **string**: UTF-8 text. Must have at least a single character. Empty is only allowed if optional.
 - **zstring**: UTF-8 text. May be empty.
-- **float**: decimal floating point, matches the regex `^?-\d+(\.\d+)?$`.
+- **float**: decimal floating point, matches the regex `^-?\d+(\.\d+)?$` (no leading `+`, no scientific notation, no `.5`).
 - **bool**: `true` or `false`
-- **vec2**: `(<x:float> <y:float>)`
-- **vec3**: `(<x:float> <y:float> <z:float>)`
+- **vec2**: `(<x:float> <y:float>)` with optional ASCII spaces after `(` and before `)`, and 1+ ASCII spaces between components.
+- **vec3**: `(<x:float> <y:float> <z:float>)` with optional ASCII spaces after `(` and before `)`, and 1+ ASCII spaces between components.
 - **color**: `#RRGGBB` (24-bit)
-- **bytes[N]**: fixed-length hex-encoded bytes of length N (2N hex chars).
+- **bytes[N]**: fixed-length hex-encoded bytes of length N (2N hex chars). Accepts upper/lower hex on wire; when used in text contexts, canonicalize to lowercase.
+- **any**: a single parameter token whose interpretation is determined by context (e.g., property tables). Validity depends on expected type; `any` does not mean “accept any bytes”. Spaces are allowed per framing; only forbidden control characters apply (except LF allowed generally).
+- **uri**: an **absolute URI** as defined in RFC 3986. When displayed to user, may be converted to IRI per RFC 3987 §3.2 guidance. Relative URIs are not allowed. LF and other invalid URI characters are forbidden.
 
 ### 4.2 Optional parameter mapping
 
@@ -677,19 +856,30 @@ For an optional parameter `[<x:type>]`:
   - For `zstring`, it maps to the **empty string** `""`.
   - For all other types, it maps to **absent/null**.
 
+This mapping also applies to optional property types `[T]`.
+
 ### 4.3 Identifier types
 
-- **userid**: A user name, must not have leading or trailing whitespace.
-- **object**: Identifier of an *object*. A kebab-case string identifier. Matches the regex `^\w+(-\w+)*$`.
+- **userid**: A user name.
+  - Must not contain LF.
+  - Must not have leading or trailing Unicode **White_Space** property characters.
+  - Must be <128 Unicode codepoints (max 127).
+- **object**: Identifier of an *object*. Matches `^[A-Za-z0-9_]+(-[A-Za-z0-9_]+)*$`.
 - **geom**: Identifier of a *geometry*. Uses the same format as the `object` type.
 - **intent**: Identifier of an *intent*. Uses the same format as the `object` type.
 - **tag**: A semantic name for a part of a *geometry*. Uses the same format as the `object` type.
+
+Reserved identifiers:
+
+- Any identifier starting with `$` is reserved and only spec-defined values are valid.
+- Unless explicitly stated, selectors include reserved identifiers.
 
 ### 4.4 Structured/enumeration types
 
 - **tapkind**: one of `{primary|secondary}`.
 - **sizemode**: one of `{stretch|cover|contain|fixed-width|fixed-height}`.
-- **billboard**: one of `{fixed|y|xy}`.
+- **version**: `v` followed by a positive integer, matching `/v[1-9][0-9]*/`.
+- **track-mode**: one of `{plane|focus}`.
 - **anchor**: one of `{top|center|bottom}-{left|center|right}`.
 - **euler**: a `vec3` interpreted as `(pan, tilt, roll)` in **degrees**.
   - Convention: intrinsic rotations, applied **roll → tilt → pan**.
@@ -699,16 +889,28 @@ For an optional parameter `[<x:type>]`:
     - roll: about local Forward; positive tilts head right
   - See **3.6.2 Rotation semantics** for full definition.
 
+### 4.5 Session token type
+
+- **session-token**: base64url without padding (`=` forbidden), characters `[A-Za-z0-9_-]`.
+  - Decodes to exactly 32 bytes.
+  - Encoded length is exactly 44 chars.
+  - Comparison is by decoded bytes.
+
 ---
 
 ## 5) Error handling model (non-normative guidance)
 
-HackVR is failure-permissive:
+HackVR is failure-permissive after establishment:
 
 - Unknown/invalid commands: ignore.
 - Missing IDs (unknown object/geom/intent): ignore.
 - Missing assets or hash mismatch: show error placeholder and continue.
-- Network interruption: the viewer may present a resume/reconnect option as described in **2.1.3**, but must continue showing the last scene.
+- Network interruption: the viewer must continue showing the last scene and inform the user (see **2.1.3**).
+
+Strictness scope:
+
+- Establishment handshakes (raw hello and HTTP upgrade) are strict and may close on mismatch.
+- After establishment, revert to optimistic model: invalid commands ignored.
 
 Rationale:
 
@@ -729,21 +931,35 @@ Clients should enforce reasonable soft limits (reference values):
 
 Specialized clients may tune these values.
 
+Selector expansion guidance:
+
+- The “1,000 applications max per command” limit is guidance and must not introduce non-deterministic partial behavior requirements.
+- A bare `*` selector must expand fully (no truncation).
+
 ---
 
-## 7) Open topics to define properly
+## 7) Miscellaneous guidance and FAQs
 
-### Billboards
+- **Cancellable request-input:** viewers can implement cancel as an ad-hoc intent (e.g., “Cancel”).
+- **Invisible trigger regions:** model via server-side logic and intents; users only interact with visible geometry.
+- **Untagged triangles:** intentionally not removable; tag anything you might want to delete later.
+- **Navigation handling:** unknown schemes in `href` are delegated to OS default handler; HackVR schemes navigate to worlds. Navigation behavior (replace/new tab/window) is viewer-defined.
 
-- Text layout details (wrapping, alignment, overflow) beyond the “fit/contain” requirement.
-- Text styling model (links, underline, outline, etc.), if any is protocol-level.
+---
+
+## 8) Open topics to define properly
+
+### Tracking
+
+- Tracking command semantics are now defined; remaining open topic is optional future extensions only.
 
 ### Assets, security, and navigation
 
 - Transport profiles for assets (exact allowed schemes per world source).
-- Caching strategy
+- Caching strategy (minimal caching/identity semantics are defined, but policies remain open).
 
 ### Interaction UX
 
 - Viewer presentation guidelines for intents (menus, keybinds, ordering).
 - Rate limiting recommendations for `set-banner` and other UI-affecting commands.
+- Interaction selection UI guidelines.
