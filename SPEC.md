@@ -952,13 +952,12 @@ Selector expansion guidance:
 - **Untagged triangles:** intentionally not removable; tag anything you might want to delete later.
 - **Navigation handling:** unknown schemes in `href` are delegated to OS default handler; HackVR schemes navigate to worlds. Navigation behavior (replace/new tab/window) is viewer-defined.
 
----
-
 ## 8) Open topics to define properly
 
-### Tracking
+### Scene Graph
 
-- Tracking command semantics are now defined; remaining open topic is optional future extensions only.
+- Specify that objects cannot form cycles, and must always form a tree
+  - Ignore that command
 
 ### Assets, security, and navigation
 
