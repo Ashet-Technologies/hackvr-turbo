@@ -29,10 +29,27 @@ HackVR operations are meant to target **semantic concepts**, not perfectly track
 
 - **Tags** describe *what something represents* (e.g., `door-main`, `enemy-goblin-03`) rather than triangle indices.
 - Servers are encouraged to treat the scene like a declarative UI: “remove everything tagged `door-*`” and then “add the new `door-*` triangles,” without relying on or querying exact client-side geometry state.
+- Network latencies are accepted and should be expected. A server should not treat this as a "hard" realtime protocol.
 
 ### 1.2 Coordinate system
 
-Coordinate system: **right-handed OpenGL convention** (X right, Y up, Z forward is -Z).
+Coordinate system: **right-handed OpenGL convention**.
+
+- +X is **right**
+- +Y is **up**
+- -Z is **forward**
+
+Unless otherwise specified, all vectors are expressed in this world basis.
+
+#### 1.2.1 Local basis at zero rotation
+
+For both **objects** and the **camera**, the neutral (zero) orientation uses:
+
+- Right   R₀ = (1, 0, 0)
+- Up      U₀ = (0, 1, 0)
+- Forward F₀ = (0, 0,-1)
+
+Rotation commands define an orientation that transforms this local basis into world space.
 
 ---
 
@@ -243,15 +260,15 @@ Control flow (typical):
 
 #### 3.3.1 Text Input
 
-- **S→C** `request-input <id:input> <prompt:string> [<default:string>]`
-  - Viewer shows a modal text input box.
+- **S→C** `request-input <prompt:string> [<default:string>]`
+  - Server requests text from the user.
+  - `prompt` tells the user what is expected from them.
+  - If `default` is given, it may be hinted to the user or be already prefilled.
 
-- **↔** `cancel-input <id:input>`
-  - Cancels a pending input request.
-  - Viewer: closes the modal if it is still open.
-  - Server: should ignore if the input was already completed.
+- **S→C** `cancel-input`
+  - Aborts the previous `request-input`, if any.
 
-- **C→S** `send-input <id:input> <text:zstring>`
+- **C→S** `send-input <text:zstring>`
   - Sends the entered text.
   - Empty text is allowed and does **not** mean cancel.
   - If a viewer supports “cancel”, it should use `cancel-input`.
@@ -280,16 +297,25 @@ Client-originated interaction events do **not** use selectors/globbing.
 
 #### 3.4.2 Intents (verbs / actions)
 
-Default intents always exist:
+Default intents that always exist:
 
-`forward back left right up down stop`
+- `$forward`: "Move forward"
+- `$back`: "Move backward"
+- `$left`: "Move left"
+- `$right`: "Move right"
+- `$up`: "Move up"
+- `$down`: "Move down"
+- `$stop`: "Stop movement"
 
 Additional intents can be defined dynamically:
 
 - **S→C** `create-intent <id:intent> <label:string>`
   - Add an extra intent the viewer can present (button, menu, keybind, radial menu, etc.).
+  - If an intent with the name `id` already exists, changes its label.
+    - This also includes the default intents.
 - **S→C** `destroy-intent <id:intent>`
-  - Remove a previously created additional intent.
+  - Remove an intent.
+  - This also includes the default intents.
 
 Triggering an intent:
 
@@ -316,7 +342,7 @@ Raycasts do **not** have a “hit world.” They merely inform the server of **d
   - S→C: server canceled a pending request.
 - **C→S** `raycast <origin:vec3> <dir:vec3>`
   - User clicked while in raycast mode; viewer sends ray origin (camera position) and direction.
-  - The click terminates raycast mode on the client.
+  - The click terminates raycast mode on the viewer.
 
 ### 3.5 Geometry management
 
@@ -330,21 +356,23 @@ Predefined:
 
 - `geom` **`$global`** exists.
 
-Lifecycle:
-
-- **S→C** `create-geometry <id:[]geom>`
-  - Creates a **triangle soup** geometry (the default geometry kind).
-- **S→C** `destroy-geometry <id:[]geom>`
-
 #### 3.5.1 Triangle Soups (default geometry)
 
 Triangle soups are the default geometry type.
 
+Lifecycle:
+
+- **S→C** `create-geometry <g:[]geom>`
+  - `g` cannot be `$global`.
+- **S→C** `destroy-geometry <g:[]geom>`
+  - `g` cannot be `$global`.
+  - If an object has `g` assigned, the objects geometry will be unset.
+
 Triangle creation (tag-aware):
 
-- **S→C** `add-triangle-list  <id:[]geom> <tag:tag> { <color:color> <p0:vec3> <p1:vec3> <p2:vec3> }`
-- **S→C** `add-triangle-strip <id:[]geom> <tag:tag> <color:color> <p0:vec3> <p1:vec3> <p2:vec3> { <pos:vec3> }`
-- **S→C** `add-triangle-fan   <id:[]geom> <tag:tag> <color:color> <p0:vec3> <p1:vec3> <p2:vec3> { <pos:vec3> }`
+- **S→C** `add-triangle-list  <id:[]geom> [<tag:tag>] { <color:color> <p0:vec3> <p1:vec3> <p2:vec3> }`
+- **S→C** `add-triangle-strip <id:[]geom> [<tag:tag>] <color:color> <p0:vec3> <p1:vec3> <p2:vec3> { <pos:vec3> }`
+- **S→C** `add-triangle-fan   <id:[]geom> [<tag:tag>] <color:color> <p0:vec3> <p1:vec3> <p2:vec3> { <pos:vec3> }`
 
 Tag semantics:
 
@@ -369,6 +397,7 @@ Picking/occlusion note:
 Text billboards are flat rectangles rendered in the world.
 
 - **S→C** `create-text-geometry <id:[]geom> <size:vec2> <font-uri:string> <font-sha256:bytes[32]> <text:string> [<anchor:anchor>] [<billboard:billboard>]`
+  - `id` cannot be `$global`.
 
 Defaults:
 
@@ -400,6 +429,7 @@ Guidance:
 Image billboards are flat rectangles rendered in the world.
 
 - **S→C** `create-sprite-geometry <id:[]geom> <size:vec2> <uri:string> <sha256:bytes[32]> [<size-mode:sizemode>] [<anchor:anchor>] [<billboard:billboard>]`
+  - `id` cannot be `$global`.
 
 Defaults:
 
@@ -438,21 +468,34 @@ Predefined:
 - `object` **`$global`** exists at origin and has `$global` geometry attached.
 - `$global` is the **scene graph root** and **cannot be reparented**.
 
-Default parenting:
+Parenting / Scene Graph:
 
 - Unless otherwise specified, newly created objects are children of **`$global`**.
+- The effective visual transform of an object is computed by application of the objects local transform and its parents effective transform.
+  - This implies that transforming the parent will also transform all of its children.
+
+### 3.6.1 Object commands
 
 Lifecycle and hierarchy:
 
 - **S→C** `create-object <obj:[]object> [<g:geom>]`
+  - `obj` cannot be `$global`.
 - **S→C** `destroy-object <obj:[]object>`
-- **S→C** `add-child <parent:object> <child:[]object> [<space:string>]`
-  - `space` is `world` (default) or `local`.
+  - `obj` cannot be `$global`.
+  - If the object has child objects in the scene graph, they will be reparented to `$global`.
+- **S→C** `reparent-object <parent:object> <child:[]object> [<transform:string>]`
+  - `transform` is `world` (default) or `local`.
+    - `world` keeps the world transformation of the object as-is
+      - This implies the local coordinates of the object will change, but will not visually move.
+    - `local` keeps the object’s local transformation as-is:
+      - This means the object will potentially move visibly.
+  - `child` cannot be `$global`.
 
 Geometry attachment:
 
-- **S→C** `set-object-geometry <obj:[]object> <g:geom>`
+- **S→C** `set-object-geometry <obj:[]object> [<g:geom>]`
   - Exactly one geometry is attached per object.
+  - If `g` is absent, the object becomes invisible.
 
 Properties:
 
@@ -470,6 +513,7 @@ Navigation security (for `href`):
 Transforms (with optional transition):
 
 - **S→C** `set-object-transform <obj:[]object> [<pos:vec3>] [<rot:euler>] [<scale:vec3>] [<t:float>]`
+  - Sets the local object transformation relative to its parent.
 
 Transition semantics:
 
@@ -484,23 +528,77 @@ Transition semantics:
 
 Rotation semantics:
 
-- `rot:euler` is authoring-friendly Euler angles.
-- Interpolation is performed in quaternion space derived from Euler.
-- Exact Euler axis/order/units are open topics.
+- `rot:euler` is an authoring-friendly Euler representation intended to match the
+  "Pan/Tilt/Roll" camera model used by Acknex-style editors.
+- Interpolation is performed in quaternion space derived from Euler angles.
+
+### 3.6.2 `rot:euler` interpretation (Pan/Tilt/Roll)
+
+`rot:euler` is a `vec3` interpreted as:
+
+`(pan, tilt, roll)` in **degrees**.
+
+These are **intrinsic** rotations (about the object’s current local axes), applied in this order:
+
+1) **Roll** (first)
+2) **Tilt**
+3) **Pan** (last)
+
+Axes and sign are defined by *effect* (to avoid ambiguity around "clockwise" views):
+
+- **Pan**: rotate about the **local Up axis**.
+  - Positive pan turns the object/camera **to the right**.
+  - Rotating around a tiny angle +ϵ, forward is roughly (+ϵ,0,−1).
+
+- **Tilt**: rotate about the **local Left axis** (i.e., -Right).
+  - Positive tilt looks **up**.
+  - Rotating around a tiny angle +ϵ, forward is roughly (0,+ϵ,−1).
+
+- **Roll**: rotate about the **local Forward axis**.
+  - Positive roll tilts the "head" **to the right**.
+  - Rotating around a tiny angle +ϵ, up is roughly (+ϵ,1,0).
+
+Notes:
+
+- This convention intentionally matches common "camera feel" controls, and may not match
+  the default mathematical sign you would get from blindly applying the right-hand rule.
+  Implementations MUST follow the above effect-based definitions.
+- Euler angles have gimbal-lock singularities (notably at tilt ≈ ±90°). This does not prevent
+  correct internal representation, because implementations are expected to convert Euler to a
+  quaternion and operate in quaternion space for interpolation and rendering.
+
+### 3.6.3 Quaternion interpolation guidance
+
+For transitions (`t` provided), the receiver should:
+
+- Convert source and target Euler rotations into quaternions using the above convention.
+- Interpolate using a shortest-path spherical interpolation (SLERP) or an equivalent method.
+- Apply the interpolated quaternion to produce the rendered orientation during the transition.
 
 ### 3.7 Views and camera control
 
 HackVR does not expose named views. The server directly sets the viewer’s camera pose.
 
-- **S→C** `set-view [<pos:vec3>] [<view-dir:vec3>] [<duration:float>]`
+- **S→C** `set-view-transform [<pos:vec3>] [<rot:euler>] [<duration:float>]`
   - Any omitted field remains unchanged.
-  - If `duration` is provided, transition over `duration` seconds.
+  - If `duration` is provided, transition the provided values over `duration` seconds, in the same manner as `set-object-transform`.
   - If omitted, change immediately.
+- **S→C** `set-view-parent [<obj:object>]`
+  - Sets the camera local to `obj`.
+  - This implies the camera now treats `obj` effective coordinate system as the camera coordinate system
+    - This means all movement of the camera is now relative to `obj`.
+  - If `obj` is absent, `$global` will be used.
+
+Camera orientation:
+
+- `rot:euler` uses the same **Pan/Tilt/Roll** convention as object transforms (see **3.6.2 Rotation semantics**).
+- The camera’s view direction and up vector are derived from this orientation (i.e., roll is meaningful).
 
 Free-look control (disjoint from `set-view`):
 
 - **S→C** `enable-free-look <enabled:bool>`
-  - When enabled, the viewer may allow immediate local pan/tilt rotation (“free look”).
+  - When enabled, the viewer may allow immediate local pan/tilt rotation ("free look").
+  - Viewers MAY also allow local roll control, but are not required to.
   - When disabled, the viewer should not allow free-look rotation.
 
 Background:
@@ -521,7 +619,7 @@ Selectors are supported for:
 
 Selectors are **not** supported for:
 
-- `userid`, `intent`, `input`
+- `userid`, `intent`
 
 General operation:
 
@@ -563,14 +661,12 @@ Globbing syntax:
 
 - **string**: UTF-8 text. Must have at least a single character. Empty is only allowed if optional.
 - **zstring**: UTF-8 text. May be empty.
-- **float**: decimal floating point, must be non-empty.
-- **bool**: `true` or `false`, must be non-empty.
-- **int**: decimal integer, must be non-empty.
-- **vec2**: `(<x:float> <y:float>)`, must be non-empty.
-- **vec3**: `(<x:float> <y:float> <z:float>)`, must be non-empty.
-- **color**: `#RRGGBB` (24-bit), must be non-empty.
-- **bytes**: hex-encoded bytes (even number of hex chars), must be non-empty.
-- **bytes[N]**: fixed-length hex-encoded bytes of length N (2N hex chars), must be non-empty.
+- **float**: decimal floating point, matches the regex `^?-\d+(\.\d+)?$`.
+- **bool**: `true` or `false`
+- **vec2**: `(<x:float> <y:float>)`
+- **vec3**: `(<x:float> <y:float> <z:float>)`
+- **color**: `#RRGGBB` (24-bit)
+- **bytes[N]**: fixed-length hex-encoded bytes of length N (2N hex chars).
 
 ### 4.2 Optional parameter mapping
 
@@ -583,21 +679,25 @@ For an optional parameter `[<x:type>]`:
 
 ### 4.3 Identifier types
 
-- **userid** (regular string; not globbable)
-- **object**
-- **geom**
-- **intent**
-- **input** (token identifying a `request-input` / `send-input` exchange)
+- **userid**: A user name, must not have leading or trailing whitespace.
+- **object**: Identifier of an *object*. A kebab-case string identifier. Matches the regex `^\w+(-\w+)*$`.
+- **geom**: Identifier of a *geometry*. Uses the same format as the `object` type.
+- **intent**: Identifier of an *intent*. Uses the same format as the `object` type.
+- **tag**: A semantic name for a part of a *geometry*. Uses the same format as the `object` type.
 
 ### 4.4 Structured/enumeration types
 
-- **tag**: a kebab-case string identifier scoped to a geometry.
-  - May be empty to mean “unreferenceable”.
-- **euler**: a `vec3` interpreted as Euler angles (exact axis order/units TBD).
 - **tapkind**: one of `{primary|secondary}`.
 - **sizemode**: one of `{stretch|cover|contain|fixed-width|fixed-height}`.
 - **billboard**: one of `{fixed|y|xy}`.
 - **anchor**: one of `{top|center|bottom}-{left|center|right}`.
+- **euler**: a `vec3` interpreted as `(pan, tilt, roll)` in **degrees**.
+  - Convention: intrinsic rotations, applied **roll → tilt → pan**.
+  - Axes/sign:
+    - pan: about local Up; positive turns right
+    - tilt: about local Left; positive looks up
+    - roll: about local Forward; positive tilts head right
+  - See **3.6.2 Rotation semantics** for full definition.
 
 ---
 
@@ -633,11 +733,6 @@ Specialized clients may tune these values.
 
 ## 7) Open topics to define properly
 
-### Geometry and transforms
-
-- Exact Euler axis/order/units and handedness/sign conventions.
-- Interpolation edge cases: shortest-path rotation, scale interpolation details.
-
 ### Billboards
 
 - Text layout details (wrapping, alignment, overflow) beyond the “fit/contain” requirement.
@@ -646,15 +741,9 @@ Specialized clients may tune these values.
 ### Assets, security, and navigation
 
 - Transport profiles for assets (exact allowed schemes per world source).
-- Caching strategy and optional `invalidate-url` command semantics.
-- Sandboxing boundaries for navigation and cross-world capabilities.
+- Caching strategy
 
 ### Interaction UX
 
 - Viewer presentation guidelines for intents (menus, keybinds, ordering).
-- `request-input` UX details (e.g., whether cancellation must be possible).
 - Rate limiting recommendations for `set-banner` and other UI-affecting commands.
-
-### Selectors and batching
-
-- Exactly which commands accept selectors (current stance: commands that take `object`, `geom`, or `tag` parameters are marked with `[]`).
