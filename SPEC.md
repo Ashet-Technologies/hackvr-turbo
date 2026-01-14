@@ -4,8 +4,6 @@
 
 This document compiles the current working shape of the HackVR protocol. It is intentionally **not** normative yet, and some topics are explicitly left open.
 
----
-
 ## 1) Intent and philosophy
 
 HackVR is a lightweight, stream-based protocol for connecting a **HackVR viewer (client)** to a **HackVR host (server)** that streams an interactive 3D scene.
@@ -53,8 +51,6 @@ For both **objects** and the **camera**, the neutral (zero) orientation uses:
 
 Rotation commands define an orientation that transforms this local basis into world space.
 
----
-
 ## 2) Transport, framing, and default HTTP upgrade path
 
 ### 2.1 Byte stream + line protocol
@@ -72,7 +68,9 @@ Control characters are forbidden except:
 
 Lines with invalid UTF-8, stray CR, or other framing violations are **command errors** and shall be ignored after establishment.
 
-Receivers should apply a conservative **line length limit** (e.g., ~1024 bytes including CRLF); exceeding it is treated as a command error. This is guidance only and must not prevent geometry streaming (servers must split into multiple lines).
+Lines must not exceed 1024 characters including the CR, LF line end. If a line would contain more characters, it shall be considered a framing error and the command shall not be parsed.
+
+Recovery after a frame parsing error (invalid encoding, line length limit exceeded, ...) shall be recovered by scanning for a CR, LF sequence and regular frame parsing shall resume afterwards.
 
 #### 2.1.1 Formal grammar (EBNF)
 
@@ -84,12 +82,12 @@ Terminals:
 
 EBNF:
 
-```
+```ebnf
 stream    = { command } ;
 
 command   = name , { TAB , param } , CR , LF ;
 
-name      = { name_char } ;
+name      = name_char, { name_char } ;
 param     = { param_char } ;
 
 (* name_char disallows all Cc control characters (including LF). *)
@@ -102,7 +100,6 @@ param_char = ? any Unicode scalar value satisfying:
 
 Additional notes:
 
-- `name` should be **non-empty**.
 - `TAB` is a separator, so it cannot appear inside `name` or `param`.
 - `CR` is not permitted anywhere except as part of the line terminator `CRLF`.
 - Because `CR` is forbidden inside `name`/`param`, `CRLF` is an unambiguous command terminator; a bare `LF` does **not** terminate a command.
@@ -132,7 +129,7 @@ Normative mappings:
 - `http+hackvr://` = HTTP/1.1 Upgrade over HTTP.
 - `https+hackvr://` = HTTP/1.1 Upgrade over HTTPS.
 
-### 2.3 Default network path: HTTP/1.1 Upgrade
+### 2.3 Connection establishment — HTTP/1.1 Upgrade
 
 HackVR can be negotiated via HTTP/1.1 `Upgrade: hackvr` (conceptually similar to WebSockets).
 
@@ -171,11 +168,13 @@ Redirect binding:
 
 Raw `hackvr(s)://` connections perform a strict handshake before any other commands.
 
-Handshake commands:
+Handshake schema:
 
 - **C→S** `hackvr-hello <max-version:version> <uri:uri> [<session-token:session-token>]`
   - `uri` must not contain a fragment; viewers may extract the fragment as a session token before connecting.
 - **S→C** `hackvr-hello <max-version:version>`
+
+`hackvr-hello` uses regular command syntax, but does not count towards the set of HackVR commands. It is only part of the hackvr(s):// handshake.
 
 Version negotiation:
 
@@ -192,8 +191,6 @@ Strictness:
 Connect-time session token behavior:
 
 - If a client hello includes a `session-token`, it is treated as if the client sent `resume-session <token>` as the first client action.
-
----
 
 ## 3) Commands
 
@@ -247,7 +244,7 @@ This is an optional identity and session layer intended to be "good enough" for 
 
 Concepts:
 
-- A connection may have an assigned `userid` (including `$anonymous`), and it may change over time.
+- A connection always has an assigned `userid` (including `$anonymous`), and it may change over time.
 - A `userid` may be protected by an identity.
 - Session tokens are **session identifiers/context hints**, not authentication credentials.
 - Authentication implies a `userid` (i.e., there is nothing to authenticate without a claimed `userid`).
@@ -264,7 +261,8 @@ Auth model:
 
 Constraints:
 
-- `$anonymous` is a reserved `userid` value and can be used with session tokens (no stable username).
+- `$anonymous` is a reserved `userid` value
+- `$anonymous` is the `userid` active when no other `userid` is accepted.
 
 #### 3.2.2 Authentication commands
 
@@ -275,7 +273,9 @@ Constraints:
 - **C→S** `set-user <user:userid>`
   - Attempts to set (or change) the `userid` for the connection.
   - The server responds with `request-authentication`, `accept-user`, or `reject-user`.
-  - If `user` is `$anonymous`, the server must always respond with `accept-user`.
+  - If `user` is `$anonymous`, the server must either
+    - respond with `accept-user`.
+    - not respond at all
 
 - **S→C** `request-authentication <user:userid> <nonce:bytes[16]>`
   - Requests proof of key ownership for `user`.
@@ -289,6 +289,9 @@ Constraints:
     - `<user>` and `<nonce>` must match the last `request-authentication` for that connection.
     - `<nonce>` must be **canonical lowercase hex** when used in the signing string.
   - No string normalization occurs; viewers sign exactly what they received, after canonical lowercase conversion of `nonce`.
+  - `nonce` is invalidated by this command.
+  - Must be followed by either `accept-user` or `reject-user`.
+    - Non-normative: If the server does not respond with either command, the viewer must assume the login process is still in process.
 
 - **S→C** `accept-user <user:userid>`
   - Indicates that `user` is accepted for the connection.
@@ -296,13 +299,22 @@ Constraints:
 - **S→C** `reject-user <user:userid> [<reason:zstring>]`
   - Rejects `user` for the connection (naming or authentication attempt).
   - If authentication is enabled, the `reason` should be non-specific (avoid “invalid user” vs “invalid signature”).
+  - This command resets the active `userid` to `$anonymous`.
+  - After this command:
+    - The server might invoke `request-user` again.
+    - The viewer might send a `set-user` unsolicited.
 
-State-machine closure:
+Command Sequence:
 
-- After **C→S** `authenticate`, the server must respond with exactly one of:
-  - **S→C** `accept-user ...` (success) or
-  - **S→C** `reject-user ...` (failure).
-- After `reject-user`, the viewer may restart with `set-user` again.
+```plain
+request-user           → set-user
+set-user               → request-authentication | accept-user | reject-user | <none>
+request-authentication → authenticate
+authenticate           → accept-user | reject-user
+accept-user            → <none>
+reject-user            → request-user | set-user | <none>
+```
+
 
 #### 3.2.3 Sessions (non-authentication)
 
@@ -343,7 +355,7 @@ Context scope:
 
 Token encoding rules:
 
-- Session tokens are base64url without padding, decode to exactly 32 bytes, encoded length 44 chars, compared by decoded bytes.
+- Session tokens are base64url without padding, decode to exactly 32 bytes, encoded length 43 chars, compared by decoded bytes.
 
 URL fragment as session token (viewer convenience):
 
@@ -378,9 +390,9 @@ Correlation between `request-input` and `send-input` is server-side only; there 
 
 #### 3.3.2 Banner
 
-- **S→C** `set-banner <text:[string]> [<t:float>]`
+- **S→C** `set-banner [<text:string>] [<t:float>]`
   - Show informational text to the user.
-  - Empty/absent text clears.
+  - If `text` is absent, the informational text is hidden.
   - If `t` is provided, auto-hide after `t` seconds (`t` must be ≥ 0).
 
 ### 3.4 World Interaction
@@ -399,7 +411,18 @@ Client-originated interaction events do **not** use selectors/globbing.
   - Text sent to an object marked `textinput`.
   - Text may be empty.
 
+- An object might have a `href` property set, which allow hyperlinking between worlds and from worlds to foreign content.
+  - Viewer must confirm navigation and show full target including scheme.
+  - Unknown schemes delegated to OS default handler; HackVR schemes open as worlds.
+
+All three interactions (`tap-object`, `tell-object` and *open `href`*) are mutually exclusive *per interaction*. That means a single user action must never trigger more than a single interaction at once.
+
 #### 3.4.2 Intents (verbs / actions)
+
+> REWORD: Intents are the non-world interaction with the server.
+>
+> - Intents are **semantic**: the server chooses whether an intent behaves as impulse, state change, menu navigation, etc.
+> - They must not be auto-repeated by a viewer
 
 Default intents that are **predefined and initially present** on connect:
 
@@ -427,7 +450,7 @@ Triggering an intent:
 
 - **C→S** `intent <id:intent> <view-dir:vec3>`
   - User triggered an intent; includes current view direction so the server can interpret it.
-  - Intents are **semantic**: the server chooses whether an intent behaves as impulse, state change, menu navigation, etc.
+  - `view-dir` is the direction the viewer is facing in global world coordinates.
 
 #### 3.4.3 Raycast mode (directional input)
 
@@ -458,6 +481,7 @@ Commands:
 - **C→S** `raycast <origin:vec3> <dir:vec3>`
   - User clicked while in raycast mode; viewer sends ray origin (camera position) and direction.
   - The click terminates raycast mode on the viewer.
+  - `origin` and `dir` are in global world coordinates.
 
 ### 3.5 Geometry management
 
@@ -504,7 +528,7 @@ Tag semantics:
 
 - Tags are scoped to a geometry.
 - Tags are **dash-grouped identifiers** intended to be self-documenting (`door-entrance`, `enemy-goblin-03`, `ui-button-start`).
-- Empty tag means **unreferenceable** (cannot be tapped, cannot be deleted).
+- Absent tag means **unreferenceable** (cannot be tapped, cannot be deleted).
 - Triangles with the same tag are semantically identical; no triangle index exists at the protocol level.
 
 Triangle removal (by tag match / selector):
@@ -605,8 +629,9 @@ Objects have transform (position/orientation/scale) and may reference a geometry
 Predefined:
 
 - `object` **`$global`** exists at origin and has `$global` geometry attached.
+  - `$global` is the **scene graph root** and **cannot be reparented**.
 - `object` **`$camera`** exists always, cannot be destroyed, and defines the viewer camera transform.
-- `$global` is the **scene graph root** and **cannot be reparented**.
+  - Apart from that, `$camera` is a regular object, can be reparented and have geometry attached
 
 Parenting / Scene Graph:
 
@@ -625,13 +650,15 @@ Lifecycle and hierarchy:
 - **S→C** `destroy-object <obj:[]object>`
   - `obj` cannot be `$global` or `$camera`.
   - If the object has child objects in the scene graph, they will be reparented to `$global` preserving world transform (equivalent to `reparent-object $global <child> world`).
-- **S→C** `reparent-object <parent:object> <child:[]object> [<transform:string>]`
+- **S→C** `reparent-object <parent:object> <child:[]object> [<transform:reparent-mode>]`
   - `transform` is `world` (default) or `local`.
     - `world` keeps the world transformation of the object as-is
       - This implies the local coordinates of the object will change, but will not visually move.
     - `local` keeps the object’s local transformation as-is:
       - This means the object will potentially move visibly.
-  - `child` cannot be `$global` or `$camera`.
+  - `child` cannot be `$global`.
+  - Loops must not be formed.
+    - `parent` must not be `child` or any of it's children.
 
 Geometry attachment:
 
@@ -643,12 +670,10 @@ Geometry attachment:
 Properties (typed):
 
 - **S→C** `set-object-property <obj:[]object> <property:string> <value:any>`
-  - `clickable: bool` — gates only `tap-object` emission.
-  - `textinput: bool` — gates only `tell-object` emission.
-  - `href: [string]` — optional; empty/unset removes href.
+  - `clickable: bool` (default: `false`) — gates only `tap-object` emission.
+  - `textinput: bool` (default: `false`) — gates only `tell-object` emission.
+  - `href: [string]` (default: **absent**) — optional; empty/unset removes href.
     - `href` must be an absolute URI string (no relative).
-    - Viewer must confirm navigation and show full target including scheme.
-    - Unknown schemes delegated to OS default handler; HackVR schemes open as worlds.
 
 Object properties do not inherit to children.
 
@@ -662,6 +687,7 @@ Transforms (with optional transition):
 - **S→C** `set-object-transform <obj:[]object> [<pos:vec3>] [<rot:euler>] [<scale:vec3>] [<t:float>]`
   - Sets the local object transformation relative to its parent.
   - `duration = (t if provided else 0.0)`.
+  - `t=0` is truly instant; no single-frame smoothing.
   - `t` must be ≥ 0.
 
 Transition semantics:
@@ -744,7 +770,7 @@ Transform chain:
 Tracking computation (in parent space, using local axes):
 
 - `plane`: rotate about local up axis so forward points toward projection of vector to target on plane orthogonal to local up.
-- `focus`: rotate local forward to point directly at target (with deterministic up-hint rules).
+- `focus`: rotate local forward to point directly at target while trying to retain local up.
 
 ### 3.7 Views and camera control
 
@@ -828,19 +854,25 @@ Bare `*` fast-path:
 
 - A selector parameter exactly `*` must expand fully (no truncation).
 
----
-
 ## 4) Types
 
 ### 4.1 Primitive types
 
 - **string**: UTF-8 text. Must have at least a single character. Empty is only allowed if optional.
 - **zstring**: UTF-8 text. May be empty.
-- **float**: decimal floating point, matches the regex `^-?\d+(\.\d+)?$` (no leading `+`, no scientific notation, no `.5`).
+- **float**: decimal floating point, matches the regex `^-?\d+(\.\d+)?$`
+  - Human-friendly, small-number format:
+    - no leading `+`
+    - no scientific notation
+    - no `.5`.
+  - NaN and Inf make no sense in this protocol
+  - Precision is viewer-defined and overflow shall be handled gracefully
+    - Not every viewer may use IEEE-745 floating points
 - **bool**: `true` or `false`
 - **vec2**: `(<x:float> <y:float>)` with optional ASCII spaces after `(` and before `)`, and 1+ ASCII spaces between components.
 - **vec3**: `(<x:float> <y:float> <z:float>)` with optional ASCII spaces after `(` and before `)`, and 1+ ASCII spaces between components.
 - **color**: `#RRGGBB` (24-bit)
+  - Can use upper- or lowercase hex characters
 - **bytes[N]**: fixed-length hex-encoded bytes of length N (2N hex chars). Accepts upper/lower hex on wire; when used in text contexts, canonicalize to lowercase.
 - **any**: a single parameter token whose interpretation is determined by context (e.g., property tables). Validity depends on expected type; `any` does not mean “accept any bytes”. Spaces are allowed per framing; only forbidden control characters apply (except LF allowed generally).
 - **uri**: an **absolute URI** as defined in RFC 3986. When displayed to user, may be converted to IRI per RFC 3987 §3.2 guidance. Relative URIs are not allowed. LF and other invalid URI characters are forbidden.
@@ -862,7 +894,7 @@ This mapping also applies to optional property types `[T]`.
   - Must not contain LF.
   - Must not have leading or trailing Unicode **White_Space** property characters.
   - Must be <128 Unicode codepoints (max 127).
-- **object**: Identifier of an *object*. Matches `^[A-Za-z0-9_]+(-[A-Za-z0-9_]+)*$`.
+- **object**: Identifier of an *object*. Matches either one of the reserved values (starting with `$`) or the regular expression `^[A-Za-z0-9_]+(-[A-Za-z0-9_]+)*$`.
 - **geom**: Identifier of a *geometry*. Uses the same format as the `object` type.
 - **intent**: Identifier of an *intent*. Uses the same format as the `object` type.
 - **tag**: A semantic name for a part of a *geometry*. Uses the same format as the `object` type.
@@ -878,6 +910,7 @@ Reserved identifiers:
 - **sizemode**: one of `{stretch|cover|contain|fixed-width|fixed-height}`.
 - **version**: `v` followed by a positive integer, matching `/v[1-9][0-9]*/`.
 - **track-mode**: one of `{plane|focus}`.
+- **reparent-mode**: one of `{world|local}`.
 - **anchor**: one of `{top|center|bottom}-{left|center|right}`.
 - **euler**: a `vec3` interpreted as `(pan, tilt, roll)` in **degrees**.
   - Convention: intrinsic rotations, applied **roll → tilt → pan**.
@@ -891,10 +924,8 @@ Reserved identifiers:
 
 - **session-token**: base64url without padding (`=` forbidden), characters `[A-Za-z0-9_-]`.
   - Decodes to exactly 32 bytes.
-  - Encoded length is exactly 44 chars.
+  - Encoded length is exactly 43 chars.
   - Comparison is by decoded bytes.
-
----
 
 ## 5) Error handling model (non-normative guidance)
 
@@ -915,26 +946,19 @@ Rationale:
 - Matches the intended social/exploration “fun and leisure” use cases.
 - Avoids leaking information via detailed error messages.
 
----
-
 ## 6) Implementation limits (anti-DoS guidance)
 
 Clients should enforce reasonable soft limits (reference values):
 
-- Selector expansion: **1,000 concrete command applications** maximum per command (after any multi-selector expansion)
 - Triangle count per geometry: **100,000 triangles**
 - Object count: **10,000 objects**
 - Object nesting depth: **16 levels**
 - Command rate: **1,000 commands/sec**
+- Selector expansion
+  - for creation commands: A maximum of **1,000 concrete command applications** maximum after any multi-selector expansion
+  - for modification/destroy commands: Any number of command applications are allowed, as the number of commands is already bound by other constraints.
 
 Specialized clients may tune these values.
-
-Selector expansion guidance:
-
-- The “1,000 applications max per command” limit is guidance and must not introduce non-deterministic partial behavior requirements.
-- A bare `*` selector must expand fully (no truncation).
-
----
 
 ## 7) Miscellaneous guidance and FAQs
 
