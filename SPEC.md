@@ -163,9 +163,16 @@ Version signaling:
 - The protocol version is carried via the HTTP header `HackVr-Version: v1`.
 - HTTP profile currently pins to `v1` (negotiation is defined in the raw handshake section).
 
-Redirect binding:
+Redirect token carriage:
 
-- Session/origin binding for HTTP uses **the request that finally opens the HackVR connection** (the final request that successfully upgraded).
+- Session/origin binding for HTTP uses the **initial URL components used for the connection attempt** (the URL the viewer started with), even if HTTP redirects occur before the final request that successfully upgrades.
+- Redirect token carriage (HTTP):
+  - The viewer may follow HTTP redirects when establishing an `http(s)+hackvr://` connection.
+  - If a session token is attached to the connection attempt (e.g., via URL fragment `#<token>`),
+    the viewer MUST carry that token through the entire redirect chain by sending the HTTP header:
+    `HackVr-Session: <session-token>` on the initial request and on every redirected follow-up request,
+    including the final request that successfully upgrades.
+  - URL fragments are never transmitted in HTTP; fragment handling is viewer-side only.
 
 ### 2.4 Connection establishment — raw handshake (`hackvr-hello`)
 
@@ -342,12 +349,16 @@ Session tokens identify server-side state (think “savegame id”), not identit
 
 Commands:
 
-- **S→C** `announce-session <token:session-token>`
+- **S→C** `announce-session <token:session-token> [<lifetime:int>]`
   - Sets/refreshes the token associated with the current connection context.
-  - If token differs from the previously announced token for this connection, the previously announced token becomes invalid (revoked for this connection).
+  - If token differs from the previously announced token for this connection, the previously announced token is no longer the active token for this connection.
   - If token is the same as previously announced, refreshes/extends lifetime.
+  - Viewer UX: the viewer SHOULD update the currently active URL by setting/replacing the fragment `#<token>` so the user can see/copy the active token.
+  - Optional lifetime: if `lifetime` is present, it is the token lifetime in seconds (MUST be ≥ 1).
+    - Once the lifetime expires, the viewer SHOULD mark the token as invalid/expired in its list of known tokens (so the user can remove it).
 - **S→C** `revoke-session <token:session-token>`
   - Informs viewer that token is no longer valid/usable (server/world-wide invalidity).
+  - Viewer MAY remove it from the list of known tokens and MAY inform the user that the session was deleted.
 - **C→S** `resume-session <token:session-token>`
   - Semantics are server-defined: may restore state, switch lobbies, be idempotent or not; client should rely on scene updates and `set-banner` for user feedback.
 
@@ -355,6 +366,8 @@ Establishment-time token carriage:
 
 - For raw `hackvr(s)://`: optional session token parameter in client `hackvr-hello`.
 - For HTTP upgrade: HTTP request header `HackVr-Session: <session-token>`.
+  - If the viewer follows redirects during the same connection attempt, it MUST include this header
+    on each redirected request as described in “Redirect token carriage (HTTP)” in §2.3.
 - An establishment token is treated as if the client sent `resume-session <token>` as the **first client action**.
 
 World-state baseline:
@@ -377,10 +390,11 @@ URL fragment as session token (viewer convenience):
 - For HackVR URLs, fragment `#<token>` is interpreted as a session token and injected into the connect-time token parameter/header.
 - Fragment is not transmitted as part of `uri` on wire; it is viewer-side parsing only.
 
-Session/origin binding:
+Token attachment rule:
 
-- Session tokens are same-origin bound using handshake-derived `(domain, port, path, query)` for raw connections and `Host + request-target` for HTTP.
-- URI fragments are ignored for binding.
+- A viewer MUST only send a session token when the token is explicitly attached to the current connection (e.g., via the connection URL fragment #<token> or an explicit user action that sets that fragment).
+- Viewers MUST NOT automatically apply tokens to other URLs/endpoints.
+- No token: If no token is attached, the viewer MUST connect without a session token.
 
 ### 3.3 Graphical Interface
 
