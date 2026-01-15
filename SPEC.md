@@ -847,7 +847,10 @@ Selectors are supported for:
 
 Selectors are **not** supported for:
 
-- `userid`, `intent`
+- `userid`
+  - Rationale: Authentication operations only ever operate on a single user.
+- `intent`
+  - Rationale: intents are user-visible UI entries and are intended to be created explicitly (no bulk creation/selectors).
 
 General operation:
 
@@ -898,6 +901,9 @@ Bare `*` fast-path:
 
 - **string**: UTF-8 text. Must be non-empty.
 - **zstring**: UTF-8 text. May be empty.
+- **int**: decimal unsigned integer, matches the regex `^(0|[1-9][0-9]*)$`
+  - non-negative
+  - no leading zeroes except for zero.
 - **float**: decimal floating point, matches the regex `^-?\d+(\.\d+)?$`
   - Human-friendly, small-number format:
     - no leading `+`
