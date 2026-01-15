@@ -400,8 +400,16 @@ Session/origin binding:
 - **C→S** `send-input <text:zstring>`
   - Sends the entered text.
   - Empty text is allowed and does **not** mean cancel.
+  - The command may only be sent while an input request is active.
 
 Correlation between `request-input` and `send-input` is server-side only; there is no protocol correlation id.
+
+Text input mode state:
+
+- `request-input` sets `text_input_mode = true`.
+- `cancel-input` sets `text_input_mode = false`.
+- `send-input` must only be sent when `text_input_mode` was true; it sets `text_input_mode = false` before emitting.
+- Multiple `request-input` do not queue text inputs; they just keep mode true until the text input is completed or cancelled.
 
 #### 3.3.2 Banner
 
