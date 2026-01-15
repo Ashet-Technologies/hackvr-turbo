@@ -474,7 +474,7 @@ Triggering an intent:
 
 - **C→S** `intent <id:intent> <view-dir:vec3>`
   - User triggered an intent; includes current view direction so the server can interpret it.
-  - `view-dir` is the direction the viewer is facing in global world coordinates.
+  - `view-dir` is the **currently rendered viewing direction** in **global world coordinates** (includes free-look, tracking, etc.; i.e., what the user is actually facing).
 
 #### 3.4.3 Raycast mode (directional input)
 
@@ -506,6 +506,7 @@ Commands:
   - User clicked while in raycast mode; viewer sends ray origin (camera position) and direction.
   - The click terminates raycast mode on the viewer.
   - `origin` and `dir` are in global world coordinates.
+    - `dir` is not required to be normalized. Servers may normalize if needed. If `dir` is the zero vector, the command is a **command error** and should be ignored.
 
 ### 3.5 Geometry management
 
