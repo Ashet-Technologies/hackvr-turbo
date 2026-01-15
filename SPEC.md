@@ -421,6 +421,7 @@ Client-originated interaction events do **not** use selectors/globbing.
   - Tapping always targets **user-visible geometry** (what the viewer is actually rendering).
   - If the hit triangle tag is empty (unreferenceable), the viewer must not send `tap-object`.
   - Viewer must not send `tap-object` for objects with `clickable=false`.
+  - For sprite geometries ($3.5.2 Sprite Geometries), the tag is the derived {X}-{Y} position tag; for triangle soups (§3.5.1 Triangle Soups) it is the semantic triangle tag.
 
 - **C→S** `tell-object <obj:object> <text:zstring>`
   - Text sent to an object marked `textinput`.
@@ -505,23 +506,25 @@ Geometries are a **reusable visual representation** that can be attached to obje
 - A geometry is identified by `<id:geom>`.
 - A geometry’s concrete kind is defined by how it was created (triangle soup vs text geometry vs sprite geometry).
 - There are no geometry queries, so servers should maintain canonical state for runtime edits.
+- Any `create-...` commmand that creates a geometry must fail if the geometry already exists.
+  - Duplicate geometries are not allowed.
 
 Predefined:
 
 - `geom` **`$global`** exists.
 
+Commands:
+
+- **S→C** `destroy-geometry <g:[]geom>`
+  - `g` cannot be `$global`.
+  - If an object has `g` assigned, the objects geometry will be unset.
+
 #### 3.5.1 Triangle Soups (default geometry)
 
 Triangle soups are the default geometry type.
 
-Lifecycle:
-
 - **S→C** `create-geometry <g:[]geom>`
   - `g` cannot be `$global`.
-  - Duplicate create targets are invalid and ignored.
-- **S→C** `destroy-geometry <g:[]geom>`
-  - `g` cannot be `$global`.
-  - If an object has `g` assigned, the objects geometry will be unset.
 
 Triangle creation (tag-aware):
 
@@ -583,6 +586,11 @@ Hit-testing:
 
 - Sprite geometries are always treated like **two triangles forming a rectangle**.
 - They are **never hit-test transparent**.
+- All sprite geometries have implicitly tagged surfaces:
+  - When picked with `tap-object`, the viewer must derive in the form `{X}-{Y}` with
+    - `X` being an integer between 0 (left edge) and 100 (right edge)
+    - `Y` being an integer between 0 (top edge) and 100 (bottom edge)
+  - The coordinates allow a server to derive which part of an image was clicked
 
 Depth testing:
 
@@ -772,13 +780,15 @@ For transitions (`t` provided), the receiver should:
 Tracking replaces billboard modes. It applies a rotation layer that can aim objects at a target.
 
 - **S→C** `track-object <obj:[]object> [<target:object>] [<mode:track-mode>] [<t:float>]`
-  - `mode` defaults to `plane`
-  - `t` defaults to 0.0 and cancels prior tracking transition; `t` must be ≥ 0.
+  - `obj` cannot be `$global`.
+  - `mode` controls how `obj` will move (default: `plane`).
+  - t is the transition duration (seconds) for blending between untracked rotation and the tracked rotation (default: `0`).
+    - It controls smooth enable/disable (and configuration changes) only; it is not dependent on whether the target moves.
+    - `t=0` applies the new tracking state immediately.
   - If `target` omitted: disables tracking (tracking rotation becomes identity, with transition if `t>0`).
   - If target missing at evaluation time: tracking is a no-op until it exists again.
-  - If `obj` is `$global`: command application ignored.
   - If `target` equals `obj`: application ignored (no self-tracking).
-  - If `target` is a child of `obj`: application ignored (`obj` can never rotate to `target` when `target` always rotates the same amount as `obj`).
+  - If `target` is a descendant of `obj`: application ignored (`obj` can never rotate to `target` when `target` always rotates the same amount as `obj`).
   - `$camera` is allowed as `obj` and can track other objects.
 
 Transform chain:
