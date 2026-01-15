@@ -232,7 +232,7 @@ Direction:
 
 Type validation may be stricter than framing. For example, framing permits LF inside parameters, but types such as `userid` and `uri` forbid LF. Type violations are command errors (ignored after establishment).
 
-After establishment, unknown/invalid commands are ignored (optimistic model), not connection-fatal.
+After establishment, any command error (unknown command, type violation, invalid state/sequence, forbidden target, etc.) must be ignored (no connection failure). Receivers must not apply partial state changes for a command instance that is a command error.
 
 ### 3.1 Chat
 
