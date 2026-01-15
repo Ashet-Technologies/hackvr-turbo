@@ -1,0 +1,25 @@
+digraph {
+    rankdir=LR;
+    node [shape=box];
+    
+    IDLE [label="(default)"];
+
+    request_user [color="red"];
+    request_authentication [color="red"];
+    accept_user [color="red"];
+    reject_user [color="red"];
+
+    set_user [color="blue"];
+    authenticate [color="blue"];
+
+    IDLE                   -> request_user;
+    request_user           -> set_user;
+    set_user               -> request_authentication;
+    set_user               -> accept_user;
+    set_user               -> reject_user;
+    request_authentication -> authenticate
+    authenticate           -> accept_user;
+    authenticate           -> reject_user;
+    accept_user            -> IDLE;
+    reject_user            -> IDLE;
+}

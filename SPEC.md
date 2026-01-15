@@ -15,11 +15,14 @@ Goals:
 - **Hyperlinkable worlds:** objects can link to other worlds.
 - **Minimal primitives, lots of composition:** geometries + objects + tracking + verbs (“intents”) + picking/raycast input.
 - **Optimistic by design:** after connection establishment, invalid commands, missing entities, or missing assets should degrade gracefully (ignore, show placeholders) rather than fail hard.
+- **Easy of server implementation:** This protocol lives by an ecosystem of different servers, worlds, games, presentations, ... Thus, a focus is set to make server implementations easy.
 
 Non-goals:
 
 - **No keyframe animation system:** only best-effort transform transitions.
 - **No continuous interaction primitives:** no drag/hold/analog streams; interactions are discrete events (taps, intents, text submission, ray input).
+- **No complex rendering setups:** Materials, transparency and effects are explicitly left out to simplify the mental model for server creators and ease the life of viewer implementors.
+- **Viewer queries:** As the server is authorative, it has knowledge about all data present on the viewer. Viewers have no ability to manipulate the world, so queries which send world data from viewer to server are out of scope.
 
 **Strict failure rules apply only during connection establishment handshakes** (raw `hackvr-hello` and HTTP Upgrade). After establishment, the protocol uses optimistic error handling.
 
@@ -229,12 +232,16 @@ After establishment, unknown/invalid commands are ignored (optimistic model), no
 
 ### 3.1 Chat
 
+Chat messages shall work like typical chat systems.
+
 - **S→C** `chat <user:userid> <message:string>`
+  - Notifies the viewer of a chat message
   - Server must always include user.
 - **C→S** `chat <message:string>`
-  - Viewer omits the user field; server ignores any user field if present.
+  - Notifies the server that the user wants to send a message.
+  - No user required as the server must know the user context.
 
-`message` must be a non-empty `string`; empty chat messages should be omitted rather than sent.
+`message` must be a non-empty for both server and viewer messages, as empty chat messages contain no relevant information.
 
 ### 3.2 Authentication and sessions
 
@@ -269,13 +276,14 @@ Constraints:
 - **S→C** `request-user [<prompt:zstring>]`
   - Ask the viewer to provide or change a `userid` for this connection.
   - `prompt` is viewer UI text (may be empty).
+  - This command initializes the authentication workflow.
+    - No other command of this group may be sent before `request-user`.
 
 - **C→S** `set-user <user:userid>`
   - Attempts to set (or change) the `userid` for the connection.
   - The server responds with `request-authentication`, `accept-user`, or `reject-user`.
-  - If `user` is `$anonymous`, the server must either
-    - respond with `accept-user`.
-    - not respond at all
+  - If `user` is `$anonymous`, the server must respond with `accept-user`.
+  - This command must only be sent after a `request-user` was received.
 
 - **S→C** `request-authentication <user:userid> <nonce:bytes[16]>`
   - Requests proof of key ownership for `user`.
@@ -283,6 +291,7 @@ Constraints:
   - The server must invalidate the nonce after 60 seconds.
   - Invalidates any previous `request-authentication` including their `nonce`.
   - `nonce` may be upper/lowercase hex on wire; receivers accept both.
+  - This command must only be sent after `set-user` was received.
 
 - **C→S** `authenticate <user:userid> <signature:bytes[64]>`
   - `signature` is an Ed25519 signature over the UTF-8 string `hackvr-auth-v1:<user>:<nonce>`.
@@ -292,29 +301,31 @@ Constraints:
   - `nonce` is invalidated by this command.
   - Must be followed by either `accept-user` or `reject-user`.
     - Non-normative: If the server does not respond with either command, the viewer must assume the login process is still in process.
+  - This command must only be sent after a `request-authentication` was received.
 
 - **S→C** `accept-user <user:userid>`
   - Indicates that `user` is accepted for the connection.
+  - After this command:
+    - The server might send `request-user` again.
 
 - **S→C** `reject-user <user:userid> [<reason:zstring>]`
   - Rejects `user` for the connection (naming or authentication attempt).
   - If authentication is enabled, the `reason` should be non-specific (avoid “invalid user” vs “invalid signature”).
   - This command resets the active `userid` to `$anonymous`.
   - After this command:
-    - The server might invoke `request-user` again.
-    - The viewer might send a `set-user` unsolicited.
+    - The server might send `request-user` again.
 
 Command Sequence:
 
 ```plain
+<IDLE>                 → request-user
 request-user           → set-user
-set-user               → request-authentication | accept-user | reject-user | <none>
+set-user               → request-authentication | accept-user | reject-user
 request-authentication → authenticate
 authenticate           → accept-user | reject-user
-accept-user            → <none>
-reject-user            → request-user | set-user | <none>
+accept-user            → <IDLE>
+reject-user            → <IDLE>
 ```
-
 
 #### 3.2.3 Sessions (non-authentication)
 
@@ -633,6 +644,8 @@ Predefined:
 - `object` **`$camera`** exists always, cannot be destroyed, and defines the viewer camera transform.
   - Apart from that, `$camera` is a regular object, can be reparented and have geometry attached
 
+All predefined objects start at `(0 0 0)` with identity rotation and scale.
+
 Parenting / Scene Graph:
 
 - Unless otherwise specified, newly created objects are children of **`$global`**.
@@ -756,11 +769,13 @@ For transitions (`t` provided), the receiver should:
 Tracking replaces billboard modes. It applies a rotation layer that can aim objects at a target.
 
 - **S→C** `track-object <obj:[]object> [<target:object>] [<mode:track-mode>] [<t:float>]`
+  - `mode` defaults to `plane`
   - `t` defaults to 0.0 and cancels prior tracking transition; `t` must be ≥ 0.
   - If `target` omitted: disables tracking (tracking rotation becomes identity, with transition if `t>0`).
   - If target missing at evaluation time: tracking is a no-op until it exists again.
   - If `obj` is `$global`: command application ignored.
   - If `target` equals `obj`: application ignored (no self-tracking).
+  - If `target` is a child of `obj`: application ignored (`obj` can never rotate to `target` when `target` always rotates the same amount as `obj`).
   - `$camera` is allowed as `obj` and can track other objects.
 
 Transform chain:
@@ -785,6 +800,8 @@ Free-look control:
   - When enabled, the viewer may allow immediate local pan/tilt rotation ("free look").
   - Viewers MAY also allow local roll control, but are not required to.
   - When disabled, the viewer should not allow free-look rotation and resets `R_free = identity`.
+
+At connection start, free-look is disabled.
 
 Camera orientation composition:
 
@@ -968,11 +985,6 @@ Specialized clients may tune these values.
 - **Navigation handling:** unknown schemes in `href` are delegated to OS default handler; HackVR schemes navigate to worlds. Navigation behavior (replace/new tab/window) is viewer-defined.
 
 ## 8) Open topics to define properly
-
-### Scene Graph
-
-- Specify that objects cannot form cycles, and must always form a tree
-  - Ignore that command
 
 ### Assets, security, and navigation
 
