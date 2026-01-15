@@ -71,7 +71,7 @@ Control characters are forbidden except:
 
 Lines with invalid UTF-8, stray CR, or other framing violations are **command errors** and shall be ignored after establishment.
 
-Lines must not exceed 1024 characters including the CR, LF line end. If a line would contain more characters, it shall be considered a framing error and the command shall not be parsed.
+Lines must not exceed 1024 bytes including the CR, LF line end. Overlong lines are a framing error and must not be parsed as commands.
 
 Recovery after a frame parsing error (invalid encoding, line length limit exceeded, ...) shall be recovered by scanning for a CR, LF sequence and regular frame parsing shall resume afterwards.
 
@@ -203,22 +203,26 @@ Connect-time session token behavior:
 - `<name:[]type>` means the argument supports **selectors/globbing** (see **3.8 Selectors and globbing**).
 - `[...]` optional, `{...}` repeated 0+ times.
 
-Optional parameters may be:
+The following rules also apply:
+
+- If the number of parameters available **on-wire** is less than the number of parameters, the missing parameters must be interpreted as if they were sent empty.
+
+This means that optional parameters may be:
 
 - **Omitted** (fewer parameters in the command)
 - **Present but empty** (consecutive TABs)
 
-Example: the following all match `foo [<bar:zstring>] [<bam:zstring>]`:
+Example: the following all match `foo [<bar:string>] [<bam:string>]`:
 
-- `foo<CR><LF>`
-- `foo<TAB><CR><LF>`
-- `foo<TAB><TAB><CR><LF>`
-
-Mappings:
-
-- `foo<CR><LF>` → `bar=null`, `bam=null`
-- `foo<TAB><CR><LF>` → `bar=""`, `bam=null`
-- `foo<TAB><TAB><CR><LF>` → `bar=""`, `bam=""`
+| On-wire Data              | Parsed Array          | `bar`  | `bam`  |
+|---------------------------|-----------------------|--------|--------|
+| `foo<CR><LF>`             | `[ "foo" ]`           | `null` | `null` |
+| `foo<TAB><CR><LF>`        | `[ "foo", "" ]`       | `null` | `null` |
+| `foo<TAB>x<CR><LF>`       | `[ "foo", "x" ]`      | `x`    | `null` |
+| `foo<TAB><TAB><CR><LF>`   | `[ "foo", "",  "" ]`  | `null` | `null` |
+| `foo<TAB>x<TAB><CR><LF>`  | `[ "foo", "x", "" ]`  | `x`    | `null` |
+| `foo<TAB><TAB>y<CR><LF>`  | `[ "foo", "",  "y" ]` | `null` | `y`    |
+| `foo<TAB>x<TAB>y<CR><LF>` | `[ "foo", "x", "y" ]` | `x`    | `y`    |
 
 Direction:
 
@@ -564,31 +568,48 @@ Untagged permanence:
 - `remove-triangles` can only remove tagged triangles.
 - Selector `*` matches all **tagged** triangles; untagged remain permanent.
 
-#### 3.5.2 Text geometries
+#### 3.5.2 Sprite Geometries
 
-Text geometries are flat rectangles rendered in the world.
+Sprite geometries are flat rectangles rendered in the world.
 
-- **S→C** `create-text-geometry <id:[]geom> <size:vec2> <font-uri:uri> <font-sha256:bytes[32]> <text:string> [<anchor:anchor>]`
+They consist of two triangles that form a rectangle on the XY plane. Their origin is defined by an `anchor`.
+
+When looking at the front of the sprite (so with a view direction of `(0 0 1)`), the coordinate system for 2D content is this:
+
+- "top-left" is at `(-W/2, H/2, 0)` (assuming an `center-center` anchor).
+- "bottom right" is at `(W/2, -H/2, 0)` (assuming an `center-center` anchor).
+
+Hit-testing:
+
+- Sprite geometries are always treated like **two triangles forming a rectangle**.
+- They are **never hit-test transparent**.
+
+Depth testing:
+
+- Sprites depth-test like opaque geometry.
+- For image rendering, alpha testing *may* be used for image geometries
+
+#### 3.5.2.1 Text Geometries
+
+Text geometries are sprites that display written text.
+
+- **S→C** `create-text-geometry <id:[]geom> <size:vec2> <uri:uri> <sha256:bytes[32]> <text:string> [<anchor:anchor>]`
   - `id` cannot be `$global`.
-
-Defaults:
-
-- `anchor` defaults to `center-center`.
+  - `size` is in local unscaled coordinates.
+  - (`uri`, `sha256`) is a font asset (see §6.1 Font Assets).
+  - `text` is the text that shall be displayed on the geometry.
+  - `anchor` defines the origin of the sprite (default: `center-center`).
 
 Text fitting:
 
 - The viewer should render text so it **fits inside** the rectangle ("contain").
 
-Hit-testing:
-
-- Text geometries are always treated like **two triangles forming a rectangle**.
-- They are **never hit-test transparent**.
-
 Mutable text properties (typed):
 
 - **S→C** `set-text-property <id:[]geom> <property:string> <value:any>`
   - `text: string` (non-empty)
-  - `color: color`
+  - `color: color` (default: `#000000`)
+  - `background: color` (default: `#FFFFFF`)
 
 Empty handling is based on the expected type (see `any` rules).
 
@@ -596,17 +617,16 @@ Guidance:
 
 - For complex changes (font, anchor, sizing model), servers should destroy and recreate the text geometry.
 
-#### 3.5.3 Sprite/image geometries
+#### 3.5.2.1 Image Geometries
 
-Sprite geometries are flat rectangles rendered in the world.
+Image geometries are sprites that display an image.
 
 - **S→C** `create-sprite-geometry <id:[]geom> <size:vec2> <uri:uri> <sha256:bytes[32]> [<size-mode:sizemode>] [<anchor:anchor>]`
   - `id` cannot be `$global`.
-
-Defaults:
-
-- `size-mode` defaults to `stretch`.
-- `anchor` defaults to `center-center`.
+  - `size` is in local unscaled coordinates.
+  - (`uri`, `sha256`) is an image asset (see §6.2 Image Assets).
+  - `size-mode` defines how the `size` may be adjusted depending on the image content (default: `stretch`).
+  - `anchor` defines the origin of the sprite (default: `center-center`).
 
 Size mode semantics:
 
@@ -615,23 +635,6 @@ Size mode semantics:
 - `contain`: preserve aspect ratio; fit entirely within `size`.
 - `fixed-width`: preserve aspect ratio; width = `size.x`, height derived.
 - `fixed-height`: preserve aspect ratio; height = `size.y`, width derived.
-
-Hit-testing:
-
-- Sprite geometries are always treated like **two triangles forming a rectangle**.
-- They are **never hit-test transparent**.
-
-Asset semantics:
-
-- Hash is over downloaded bytes.
-- Treat `(uri, sha256)` as distinct assets; same uri with different hash is different asset.
-- Viewer may cache by `(uri, hash)` or by hash only.
-- Hash mismatch or download failure shows placeholder and continues; retry strategy is viewer-defined but should avoid DoS.
-- Viewer provides fallback default font + image placeholder.
-
-Depth testing:
-
-- Sprites depth-test like opaque geometry.
 
 ### 3.6 Object management (scene graph)
 
@@ -832,6 +835,7 @@ General operation:
 - A selector expands to **zero or more concrete values**.
 - If a selector expands to zero values, the command becomes a no-op.
 - **No deterministic expansion order is required**; commands must not depend on selector expansion order.
+- After selector expansion, the command is evaluated as if each expanded concrete command were issued individually. A command error for one expanded instance must not affect other expanded instances.
 
 Multiple selector parameters:
 
@@ -842,8 +846,6 @@ Creation + selectors:
 - For commands that *create* entities, selectors are allowed **only as expansions**, not as wildcards.
   - Allowed: `{a,b,c}`, `{0..10}`, `{00..10}`
   - Not allowed in create commands: `*` or `?`
-- Creation with selectors is equivalent to executing each expanded command individually.
-- For create targets that already exist, those applications are ignored; other expansions may still succeed.
 
 Selector-friendly naming:
 
@@ -875,7 +877,7 @@ Bare `*` fast-path:
 
 ### 4.1 Primitive types
 
-- **string**: UTF-8 text. Must have at least a single character. Empty is only allowed if optional.
+- **string**: UTF-8 text. Must be non-empty.
 - **zstring**: UTF-8 text. May be empty.
 - **float**: decimal floating point, matches the regex `^-?\d+(\.\d+)?$`
   - Human-friendly, small-number format:
@@ -963,7 +965,31 @@ Rationale:
 - Matches the intended social/exploration “fun and leisure” use cases.
 - Avoids leaking information via detailed error messages.
 
-## 6) Implementation limits (anti-DoS guidance)
+## 6) Assets
+
+Asset semantics:
+
+- Hash is over downloaded bytes.
+- Treat `(uri, sha256)` as distinct assets; same uri with different hash is different asset.
+- Viewer may cache by `(uri, hash)` or by hash only.
+- Hash mismatch or download failure shows placeholder and continues; retry strategy is viewer-defined but should avoid DoS.
+
+### 6.1) Font Assets
+
+- The placeholder for font assets must be a font capable of rendering at least ASCII text.
+- A viewer shall at least support the following font formats:
+  - TTF
+
+### 6.2) Image Assets
+
+- The placeholder for image assets should be either
+  - a flat magenta colored sprite (`#FF00FF`)
+  - an easily recognizable pattern like a magenta/white checkerboard pattern
+- A viewer shall at least support the following image formats:
+  - PNG
+  - JPEG
+
+## 7) Implementation limits (anti-DoS guidance)
 
 Clients should enforce reasonable soft limits (reference values):
 
@@ -977,14 +1003,14 @@ Clients should enforce reasonable soft limits (reference values):
 
 Specialized clients may tune these values.
 
-## 7) Miscellaneous guidance and FAQs
+## 8) Miscellaneous guidance and FAQs
 
 - **Cancellable request-input:** viewers can implement cancel as an ad-hoc intent (e.g., “Cancel”).
 - **Invisible trigger regions:** model via server-side logic and intents; users only interact with visible geometry.
 - **Untagged triangles:** intentionally not removable; tag anything you might want to delete later.
 - **Navigation handling:** unknown schemes in `href` are delegated to OS default handler; HackVR schemes navigate to worlds. Navigation behavior (replace/new tab/window) is viewer-defined.
 
-## 8) Open topics to define properly
+## 9) Open topics to define properly
 
 ### Assets, security, and navigation
 
