@@ -11,7 +11,7 @@ from hackvr.common import types
 
 class BaseProtocol(ProtocolBase):
     @command("all-types")
-    def all_types(  # type: ignore[override]
+    def all_types(
         self,
         name: str,
         text: types.ZString,
@@ -43,7 +43,7 @@ class BaseProtocol(ProtocolBase):
         raise NotImplementedError
 
     @command("optional-values")
-    def optional_values(  # type: ignore[override]
+    def optional_values(
         self,
         maybe_count: Optional[int],
         maybe_ratio: float | None,
@@ -138,5 +138,5 @@ def test_zstring_cannot_be_optional():
     with pytest.raises(TypeError):
         class BadZstring(ProtocolBase):
             @command("bad-zstring")
-            def bad_zstring(self, value: types.ZString | None) -> None:  # type: ignore[override]
+            def bad_zstring(self, value: types.ZString | None) -> None:
                 raise NotImplementedError

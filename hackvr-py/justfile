@@ -5,5 +5,8 @@ lint:
     ty check
     ruff check
 
+install:
+    python -m pip install -r requirements.txt
+
 package:
     python -m build

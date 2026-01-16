@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -97,52 +98,52 @@ class ParseError(ValueError):
 
 def parse_string(value: str, optional: bool) -> str | None:
     assert value is not None
-    value = _optional_empty(value, optional, allow_empty=False)
-    if value is None:
+    raw = _optional_empty(value, optional, allow_empty=False)
+    if raw is None:
         return None
-    if value == "":
+    if raw == "":
         raise ParseError("string must be non-empty")
-    return value
+    return raw
 
 
 def parse_zstring(value: str, optional: bool) -> str:
     assert value is not None
     if optional:
         raise ParseError("zstring cannot be optional")
-    value = _optional_empty(value, optional, allow_empty=True)
-    if value is None:
+    raw = _optional_empty(value, optional, allow_empty=True)
+    if raw is None:
         return ""
-    return value
+    return raw
 
 
 def parse_int(value: str, optional: bool) -> int | None:
     assert value is not None
-    value = _optional_empty(value, optional, allow_empty=False)
-    if value is None:
+    raw = _optional_empty(value, optional, allow_empty=False)
+    if raw is None:
         return None
-    if not _INT_RE.fullmatch(value):
+    if not _INT_RE.fullmatch(raw):
         raise ParseError("invalid int")
-    return int(value)
+    return int(raw)
 
 
 def parse_float(value: str, optional: bool) -> float | None:
     assert value is not None
-    value = _optional_empty(value, optional, allow_empty=False)
-    if value is None:
+    raw = _optional_empty(value, optional, allow_empty=False)
+    if raw is None:
         return None
-    if not _FLOAT_RE.fullmatch(value):
+    if not _FLOAT_RE.fullmatch(raw):
         raise ParseError("invalid float")
-    return float(value)
+    return float(raw)
 
 
 def parse_bool(value: str, optional: bool) -> bool | None:
     assert value is not None
-    value = _optional_empty(value, optional, allow_empty=False)
-    if value is None:
+    raw = _optional_empty(value, optional, allow_empty=False)
+    if raw is None:
         return None
-    if value == "true":
+    if raw == "true":
         return True
-    if value == "false":
+    if raw == "false":
         return False
     raise ParseError("invalid bool")
 
@@ -157,23 +158,23 @@ def parse_vec3(value: str, optional: bool) -> Vec3 | None:
 
 def parse_color(value: str, optional: bool) -> Color | None:
     assert value is not None
-    value = _optional_empty(value, optional, allow_empty=False)
-    if value is None:
+    raw = _optional_empty(value, optional, allow_empty=False)
+    if raw is None:
         return None
-    if not _COLOR_RE.fullmatch(value):
+    if not _COLOR_RE.fullmatch(raw):
         raise ParseError("invalid color")
-    return Color(value.lower())
+    return Color(raw.lower())
 
 
 def parse_bytes(value: str, optional: bool, length: int) -> bytes | None:
     assert value is not None
-    value = _optional_empty(value, optional, allow_empty=False)
-    if value is None:
+    raw = _optional_empty(value, optional, allow_empty=False)
+    if raw is None:
         return None
     expected_length = length * 2
-    if len(value) != expected_length or not _HEX_RE.fullmatch(value):
+    if len(raw) != expected_length or not _HEX_RE.fullmatch(raw):
         raise ParseError("invalid bytes")
-    return bytes.fromhex(value)
+    return bytes.fromhex(raw)
 
 
 def parse_bytes16(value: str, optional: bool) -> Bytes16 | None:
@@ -206,37 +207,37 @@ def bytes_parser(length: int) -> Callable[[str, bool], bytes | None]:
 
 def parse_any(value: str, optional: bool) -> AnyValue | None:
     assert value is not None
-    value = _optional_empty(value, optional, allow_empty=True)
-    if value is None:
+    raw = _optional_empty(value, optional, allow_empty=True)
+    if raw is None:
         return None
-    return AnyValue(value)
+    return AnyValue(raw)
 
 
 def parse_uri(value: str, optional: bool) -> URI | None:
     assert value is not None
-    value = _optional_empty(value, optional, allow_empty=False)
-    if value is None:
+    raw = _optional_empty(value, optional, allow_empty=False)
+    if raw is None:
         return None
-    if _contains_control(value) or any(ch.isspace() for ch in value):
+    if _contains_control(raw) or any(ch.isspace() for ch in raw):
         raise ParseError("invalid uri")
-    parsed = urlsplit(value)
+    parsed = urlsplit(raw)
     if not parsed.scheme:
         raise ParseError("uri must be absolute")
-    return URI(value)
+    return URI(raw)
 
 
 def parse_userid(value: str, optional: bool) -> UserID | None:
     assert value is not None
-    value = _optional_empty(value, optional, allow_empty=False)
-    if value is None:
+    raw = _optional_empty(value, optional, allow_empty=False)
+    if raw is None:
         return None
-    if "\n" in value:
+    if "\n" in raw:
         raise ParseError("userid contains LF")
-    if value != value.strip():
+    if raw != raw.strip():
         raise ParseError("userid has leading/trailing whitespace")
-    if len(value) >= 128:
+    if len(raw) >= 128:
         raise ParseError("userid too long")
-    return UserID(value)
+    return UserID(raw)
 
 
 def parse_object(value: str, optional: bool) -> ObjectID | None:
@@ -304,10 +305,10 @@ def parse_anchor(value: str, optional: bool) -> Anchor | None:
 
 def parse_version(value: str, optional: bool) -> Version | None:
     assert value is not None
-    value = _optional_empty(value, optional, allow_empty=False)
-    if value is None:
+    raw = _optional_empty(value, optional, allow_empty=False)
+    if raw is None:
         return None
-    match = _VERSION_RE.fullmatch(value)
+    match = _VERSION_RE.fullmatch(raw)
     if not match:
         raise ParseError("invalid version")
     return Version(int(match.group(1)))
@@ -322,17 +323,17 @@ def parse_euler(value: str, optional: bool) -> Euler | None:
 
 def parse_session_token(value: str, optional: bool) -> SessionToken | None:
     assert value is not None
-    value = _optional_empty(value, optional, allow_empty=False)
-    if value is None:
+    raw = _optional_empty(value, optional, allow_empty=False)
+    if raw is None:
         return None
-    if len(value) != 43:
+    if len(raw) != 43:
         raise ParseError("invalid session token length")
-    if not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", raw):
         raise ParseError("invalid session token characters")
-    padded = value + "=="
+    padded = raw + "=="
     try:
         decoded = base64.urlsafe_b64decode(padded)
-    except (ValueError, base64.binascii.Error) as exc:
+    except (ValueError, binascii.Error) as exc:
         raise ParseError("invalid session token") from exc
     if len(decoded) != 32:
         raise ParseError("invalid session token bytes")
@@ -346,27 +347,27 @@ def _optional_empty(value: str, optional: bool, allow_empty: bool) -> str | None
 
 
 def _parse_identifier(value: str, optional: bool) -> str | None:
-    value = _optional_empty(value, optional, allow_empty=False)
-    if value is None:
+    raw = _optional_empty(value, optional, allow_empty=False)
+    if raw is None:
         return None
-    if _IDENTIFIER_RE.fullmatch(value) or _RESERVED_RE.fullmatch(value):
-        return value
+    if _IDENTIFIER_RE.fullmatch(raw) or _RESERVED_RE.fullmatch(raw):
+        return raw
     raise ParseError("invalid identifier")
 
 
 def _parse_enum(value: str, optional: bool, allowed: set[str]) -> str | None:
-    value = _optional_empty(value, optional, allow_empty=False)
-    if value is None:
+    raw = _optional_empty(value, optional, allow_empty=False)
+    if raw is None:
         return None
-    if value not in allowed:
+    if raw not in allowed:
         raise ParseError("invalid enum")
-    return value
+    return raw
 
 
 def _parse_vec(value: str, optional: bool, count: int):
     assert value is not None
-    value = _optional_empty(value, optional, allow_empty=False)
-    if value is None:
+    raw = _optional_empty(value, optional, allow_empty=False)
+    if raw is None:
         return None
     if count == 2:
         pattern = rf"^\(\s*({_FLOAT_BODY})\s+({_FLOAT_BODY})\s*\)$"
@@ -374,7 +375,7 @@ def _parse_vec(value: str, optional: bool, count: int):
         pattern = rf"^\(\s*({_FLOAT_BODY})\s+({_FLOAT_BODY})\s+({_FLOAT_BODY})\s*\)$"
     else:
         raise ValueError("unsupported vector length")
-    match = re.fullmatch(pattern, value)
+    match = re.fullmatch(pattern, raw)
     if not match:
         raise ParseError("invalid vector")
     numbers = [float(group) for group in match.groups()]

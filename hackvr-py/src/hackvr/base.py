@@ -21,8 +21,8 @@ class _CommandSpec:
 
 def command(name: str) -> Callable[[Callable[..., None]], Callable[..., None]]:
     def decorator(func: Callable[..., None]) -> Callable[..., None]:
-        func.__command_name__ = name
-        func.__isabstractmethod__ = True
+        setattr(func, "__command_name__", name)  # noqa: B010
+        setattr(func, "__isabstractmethod__", True)  # noqa: B010
         return func
 
     return decorator
@@ -85,8 +85,11 @@ class ProtocolBase(ABC):
 
     def _lookup_command(self, cmd: str) -> _CommandSpec | None:
         for cls in type(self).mro():
-            if hasattr(cls, "_command_specs") and cmd in cls._command_specs:
-                return cls._command_specs[cmd]
+            if not issubclass(cls, ProtocolBase):
+                continue
+            command_specs = cls._command_specs
+            if cmd in command_specs:
+                return command_specs[cmd]
         return None
 
     def _parse_args(self, spec: _CommandSpec, args: list[str]) -> list[Any]:

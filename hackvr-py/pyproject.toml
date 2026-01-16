@@ -22,5 +22,7 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B"]
 
-[tool.ty]
+[tool.ty.environment]
+python = "/root/.pyenv/versions/3.12.12/bin/python"
 python-version = "3.12"
+extra-paths = ["/root/.pyenv/versions/3.12.12/lib/python3.12/site-packages"]
