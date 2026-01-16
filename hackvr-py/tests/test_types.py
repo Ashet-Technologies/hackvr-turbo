@@ -1,4 +1,5 @@
 import base64
+
 import pytest
 
 from hackvr.common import types
@@ -27,9 +28,9 @@ def test_int_float_bool():
 
 def test_vectors_and_color():
     vec2 = types.parse_vec2("(1 2)", False)
-    assert vec2 == types.Vec2(types.Float(1.0), types.Float(2.0))
+    assert vec2 == types.Vec2(1.0, 2.0)
     vec3 = types.parse_vec3("( -1 0 3.5 )", False)
-    assert vec3 == types.Vec3(types.Float(-1.0), types.Float(0.0), types.Float(3.5))
+    assert vec3 == types.Vec3(-1.0, 0.0, 3.5)
     assert types.parse_color("#Aa00FF", False) == "#aa00ff"
     with pytest.raises(types.ParseError):
         types.parse_vec2("(1,2)", False)
@@ -49,17 +50,17 @@ def test_identifiers_and_enums():
     assert types.parse_geom("$global", False) == "$global"
     with pytest.raises(types.ParseError):
         types.parse_tag("bad!", False)
-    assert types.parse_tapkind("primary", False) == "primary"
-    assert types.parse_sizemode("cover", False) == "cover"
-    assert types.parse_track_mode("focus", False) == "focus"
-    assert types.parse_reparent_mode("local", False) == "local"
-    assert types.parse_anchor("top-left", False) == "top-left"
+    assert types.parse_tapkind("primary", False) == types.TapKind.PRIMARY
+    assert types.parse_sizemode("cover", False) == types.SizeMode.COVER
+    assert types.parse_track_mode("focus", False) == types.TrackMode.FOCUS
+    assert types.parse_reparent_mode("local", False) == types.ReparentMode.LOCAL
+    assert types.parse_anchor("top-left", False) == types.Anchor.TOP_LEFT
 
 
 def test_version_and_euler():
     assert types.parse_version("v12", False) == 12
     euler = types.parse_euler("(0 1 2)", False)
-    assert euler == types.Euler(types.Float(0.0), types.Float(1.0), types.Float(2.0))
+    assert euler == types.Euler(0.0, 1.0, 2.0)
     with pytest.raises(types.ParseError):
         types.parse_version("v0", False)
 

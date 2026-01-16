@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 from typing import Optional
 
+import pytest
+
 from hackvr.base import ProtocolBase, command
 from hackvr.common import types
 
@@ -11,11 +13,11 @@ class BaseProtocol(ProtocolBase):
     @command("all-types")
     def all_types(  # type: ignore[override]
         self,
-        name: types.String,
+        name: str,
         text: types.ZString,
-        count: types.Int,
-        ratio: types.Float,
-        enabled: types.Bool,
+        count: int,
+        ratio: float,
+        enabled: bool,
         pos2: types.Vec2,
         pos3: types.Vec3,
         shade: types.Color,
@@ -43,15 +45,10 @@ class BaseProtocol(ProtocolBase):
     @command("optional-values")
     def optional_values(  # type: ignore[override]
         self,
-        maybe_count: Optional[types.Int],
-        maybe_ratio: types.Float | None,
+        maybe_count: Optional[int],
+        maybe_ratio: float | None,
     ) -> None:
         raise NotImplementedError
-
-    @command("bad-zstring")
-    def bad_zstring(self, value: types.ZString | None) -> None:  # type: ignore[override]
-        raise NotImplementedError
-
 
 class Server(BaseProtocol):
     def __init__(self) -> None:
@@ -66,9 +63,6 @@ class Server(BaseProtocol):
 
     def optional_values(self, *args: object) -> None:
         self.calls.append(("optional-values", args))
-
-    def bad_zstring(self, *args: object) -> None:
-        self.calls.append(("bad-zstring", args))
 
 
 def test_execute_command_parses_all_types():
@@ -112,9 +106,14 @@ def test_execute_command_parses_all_types():
     assert parsed[2] == 12
     assert parsed[3] == 3.5
     assert parsed[4] is True
-    assert parsed[5] == types.Vec2(types.Float(1.0), types.Float(2.0))
-    assert parsed[6] == types.Vec3(types.Float(3.0), types.Float(4.0), types.Float(5.0))
-    assert parsed[24] == types.Euler(types.Float(0.0), types.Float(1.0), types.Float(2.0))
+    assert parsed[5] == types.Vec2(1.0, 2.0)
+    assert parsed[6] == types.Vec3(3.0, 4.0, 5.0)
+    assert parsed[18] == types.TapKind.PRIMARY
+    assert parsed[19] == types.SizeMode.COVER
+    assert parsed[20] == types.TrackMode.PLANE
+    assert parsed[21] == types.ReparentMode.LOCAL
+    assert parsed[22] == types.Anchor.TOP_LEFT
+    assert parsed[24] == types.Euler(0.0, 1.0, 2.0)
 
 
 def test_execute_command_optional_values():
@@ -136,6 +135,8 @@ def test_execute_command_unknown_and_invalid():
 
 
 def test_zstring_cannot_be_optional():
-    server = Server()
-    server.execute_command("bad-zstring", [""])
-    assert server.errors[0][0] == "bad-zstring"
+    with pytest.raises(TypeError):
+        class BadZstring(ProtocolBase):
+            @command("bad-zstring")
+            def bad_zstring(self, value: types.ZString | None) -> None:  # type: ignore[override]
+                raise NotImplementedError

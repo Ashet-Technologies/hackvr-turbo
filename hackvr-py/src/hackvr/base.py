@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from abc import ABC
-from dataclasses import dataclass
 import inspect
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from types import UnionType
-from typing import Any, Callable, get_args, get_origin, get_type_hints, Union
+from typing import Any, Callable, Union, get_args, get_origin, get_type_hints
 
 from .common import types
 
@@ -21,8 +21,8 @@ class _CommandSpec:
 
 def command(name: str) -> Callable[[Callable[..., None]], Callable[..., None]]:
     def decorator(func: Callable[..., None]) -> Callable[..., None]:
-        setattr(func, "__command_name__", name)
-        setattr(func, "__isabstractmethod__", True)
+        func.__command_name__ = name
+        func.__isabstractmethod__ = True
         return func
 
     return decorator
@@ -39,11 +39,24 @@ class ProtocolBase(ABC):
             if command_name is None:
                 continue
             signature = inspect.signature(attr)
-            if signature.return_annotation not in (inspect.Signature.empty, None, type(None), "None"):
+            if signature.return_annotation not in (
+                inspect.Signature.empty,
+                None,
+                type(None),
+                "None",
+            ):
                 raise TypeError(f"@command {command_name} must return None")
             parameters = list(signature.parameters.values())
             if not parameters or parameters[0].name != "self":
                 raise TypeError(f"@command {command_name} must be an instance method")
+            type_hints = get_type_hints(attr, include_extras=True)
+            for param in parameters[1:]:
+                annotation = type_hints.get(param.name, str)
+                optional, inner = _unwrap_optional(annotation)
+                if optional and types.is_zstring_annotation(inner):
+                    raise TypeError(
+                        f"@command {command_name} cannot use optional zstring"
+                    )
             cls._command_specs[command_name] = _CommandSpec(
                 name=command_name,
                 method_name=attr_name,
@@ -66,9 +79,9 @@ class ProtocolBase(ABC):
         handler = getattr(self, spec.method_name)
         handler(*parsed_args)
 
+    @abstractmethod
     def handle_error(self, cmd: str, message: str, args: list[str]) -> None:
-        _ = cmd, message, args
-        return
+        raise NotImplementedError
 
     def _lookup_command(self, cmd: str) -> _CommandSpec | None:
         for cls in type(self).mro():
@@ -82,8 +95,6 @@ class ProtocolBase(ABC):
         for index, param in enumerate(spec.parameters):
             annotation = type_hints.get(param.name, str)
             optional, inner = _unwrap_optional(annotation)
-            if optional and inner is types.ZString:
-                raise ValueError("zstring cannot be optional")
             value = args[index] if index < len(args) else ""
             if not optional:
                 assert value is not None
@@ -91,12 +102,13 @@ class ProtocolBase(ABC):
         return parsed_args
 
     def _parse_value(self, annotation: Any, value: str, optional: bool) -> Any:
+        if types.is_zstring_annotation(annotation):
+            return types.parse_zstring(value, optional)
         parser_map: dict[Any, Callable[[str, bool], Any]] = {
-            types.String: types.parse_string,
-            types.ZString: types.parse_zstring,
-            types.Int: types.parse_int,
-            types.Float: types.parse_float,
-            types.Bool: types.parse_bool,
+            str: types.parse_string,
+            int: types.parse_int,
+            float: types.parse_float,
+            bool: types.parse_bool,
             types.Vec2: types.parse_vec2,
             types.Vec3: types.parse_vec3,
             types.Euler: types.parse_euler,

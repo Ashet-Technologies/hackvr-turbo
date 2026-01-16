@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections import deque
 import unicodedata
+from collections import deque
 
 MAX_LINE_LENGTH = 1024
 

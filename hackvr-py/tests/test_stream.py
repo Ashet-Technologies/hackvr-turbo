@@ -1,6 +1,6 @@
 import random
 
-from hackvr.common.stream import Parser, MAX_LINE_LENGTH
+from hackvr.common.stream import MAX_LINE_LENGTH, Parser
 
 
 def test_parser_reads_lines_with_tabs():

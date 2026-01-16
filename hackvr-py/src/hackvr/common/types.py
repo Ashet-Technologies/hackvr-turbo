@@ -6,7 +6,8 @@ import base64
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import Callable, NewType
+from enum import Enum
+from typing import Annotated, Callable, NewType, get_args, get_origin
 from urllib.parse import urlsplit
 
 _FLOAT_BODY = r"-?\d+(?:\.\d+)?"
@@ -18,11 +19,8 @@ _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_]+(-[A-Za-z0-9_]+)*$")
 _RESERVED_RE = re.compile(r"^\$[A-Za-z0-9_]+(-[A-Za-z0-9_]+)*$")
 
-String = NewType("String", str)
-ZString = NewType("ZString", str)
-Int = NewType("Int", int)
-Float = NewType("Float", float)
-Bool = NewType("Bool", bool)
+String = str
+ZString = Annotated[str, "zstring"]
 Color = NewType("Color", str)
 AnyValue = NewType("AnyValue", str)
 URI = NewType("URI", str)
@@ -31,11 +29,6 @@ ObjectID = NewType("ObjectID", str)
 GeomID = NewType("GeomID", str)
 IntentID = NewType("IntentID", str)
 Tag = NewType("Tag", str)
-TapKind = NewType("TapKind", str)
-SizeMode = NewType("SizeMode", str)
-TrackMode = NewType("TrackMode", str)
-ReparentMode = NewType("ReparentMode", str)
-Anchor = NewType("Anchor", str)
 Version = NewType("Version", int)
 Bytes16 = NewType("Bytes16", bytes)
 Bytes32 = NewType("Bytes32", bytes)
@@ -43,79 +36,114 @@ Bytes64 = NewType("Bytes64", bytes)
 SessionToken = NewType("SessionToken", bytes)
 
 
+class TapKind(Enum):
+    PRIMARY = "primary"
+    SECONDARY = "secondary"
+
+
+class SizeMode(Enum):
+    STRETCH = "stretch"
+    COVER = "cover"
+    CONTAIN = "contain"
+    FIXED_WIDTH = "fixed-width"
+    FIXED_HEIGHT = "fixed-height"
+
+
+class TrackMode(Enum):
+    PLANE = "plane"
+    FOCUS = "focus"
+
+
+class ReparentMode(Enum):
+    WORLD = "world"
+    LOCAL = "local"
+
+
+class Anchor(Enum):
+    TOP_LEFT = "top-left"
+    TOP_CENTER = "top-center"
+    TOP_RIGHT = "top-right"
+    CENTER_LEFT = "center-left"
+    CENTER_CENTER = "center-center"
+    CENTER_RIGHT = "center-right"
+    BOTTOM_LEFT = "bottom-left"
+    BOTTOM_CENTER = "bottom-center"
+    BOTTOM_RIGHT = "bottom-right"
+
+
 @dataclass(frozen=True)
 class Vec2:
-    x: Float
-    y: Float
+    x: float
+    y: float
 
 
 @dataclass(frozen=True)
 class Vec3:
-    x: Float
-    y: Float
-    z: Float
+    x: float
+    y: float
+    z: float
 
 
 @dataclass(frozen=True)
 class Euler:
-    pan: Float
-    tilt: Float
-    roll: Float
+    pan: float
+    tilt: float
+    roll: float
 
 
 class ParseError(ValueError):
     """Raised when a HackVR type fails validation."""
 
 
-def parse_string(value: str, optional: bool) -> String | None:
+def parse_string(value: str, optional: bool) -> str | None:
     assert value is not None
     value = _optional_empty(value, optional, allow_empty=False)
     if value is None:
         return None
     if value == "":
         raise ParseError("string must be non-empty")
-    return String(value)
+    return value
 
 
-def parse_zstring(value: str, optional: bool) -> ZString | None:
+def parse_zstring(value: str, optional: bool) -> str:
     assert value is not None
     if optional:
         raise ParseError("zstring cannot be optional")
     value = _optional_empty(value, optional, allow_empty=True)
     if value is None:
-        return None
-    return ZString(value)
+        return ""
+    return value
 
 
-def parse_int(value: str, optional: bool) -> Int | None:
+def parse_int(value: str, optional: bool) -> int | None:
     assert value is not None
     value = _optional_empty(value, optional, allow_empty=False)
     if value is None:
         return None
     if not _INT_RE.fullmatch(value):
         raise ParseError("invalid int")
-    return Int(int(value))
+    return int(value)
 
 
-def parse_float(value: str, optional: bool) -> Float | None:
+def parse_float(value: str, optional: bool) -> float | None:
     assert value is not None
     value = _optional_empty(value, optional, allow_empty=False)
     if value is None:
         return None
     if not _FLOAT_RE.fullmatch(value):
         raise ParseError("invalid float")
-    return Float(float(value))
+    return float(value)
 
 
-def parse_bool(value: str, optional: bool) -> Bool | None:
+def parse_bool(value: str, optional: bool) -> bool | None:
     assert value is not None
     value = _optional_empty(value, optional, allow_empty=False)
     if value is None:
         return None
     if value == "true":
-        return Bool(True)
+        return True
     if value == "false":
-        return Bool(False)
+        return False
     raise ParseError("invalid bool")
 
 
@@ -240,49 +268,35 @@ def parse_tag(value: str, optional: bool) -> Tag | None:
 
 
 def parse_tapkind(value: str, optional: bool) -> TapKind | None:
-    parsed = _parse_enum(value, optional, {"primary", "secondary"})
+    parsed = _parse_enum(value, optional, {member.value for member in TapKind})
     if parsed is None:
         return None
     return TapKind(parsed)
 
 
 def parse_sizemode(value: str, optional: bool) -> SizeMode | None:
-    parsed = _parse_enum(value, optional, {"stretch", "cover", "contain", "fixed-width", "fixed-height"})
+    parsed = _parse_enum(value, optional, {member.value for member in SizeMode})
     if parsed is None:
         return None
     return SizeMode(parsed)
 
 
 def parse_track_mode(value: str, optional: bool) -> TrackMode | None:
-    parsed = _parse_enum(value, optional, {"plane", "focus"})
+    parsed = _parse_enum(value, optional, {member.value for member in TrackMode})
     if parsed is None:
         return None
     return TrackMode(parsed)
 
 
 def parse_reparent_mode(value: str, optional: bool) -> ReparentMode | None:
-    parsed = _parse_enum(value, optional, {"world", "local"})
+    parsed = _parse_enum(value, optional, {member.value for member in ReparentMode})
     if parsed is None:
         return None
     return ReparentMode(parsed)
 
 
 def parse_anchor(value: str, optional: bool) -> Anchor | None:
-    parsed = _parse_enum(
-        value,
-        optional,
-        {
-            "top-left",
-            "top-center",
-            "top-right",
-            "center-left",
-            "center-center",
-            "center-right",
-            "bottom-left",
-            "bottom-center",
-            "bottom-right",
-        },
-    )
+    parsed = _parse_enum(value, optional, {member.value for member in Anchor})
     if parsed is None:
         return None
     return Anchor(parsed)
@@ -363,10 +377,18 @@ def _parse_vec(value: str, optional: bool, count: int):
     match = re.fullmatch(pattern, value)
     if not match:
         raise ParseError("invalid vector")
-    numbers = [Float(float(group)) for group in match.groups()]
+    numbers = [float(group) for group in match.groups()]
     if count == 2:
         return Vec2(numbers[0], numbers[1])
     return Vec3(numbers[0], numbers[1], numbers[2])
+
+
+def is_zstring_annotation(annotation: object) -> bool:
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        args = get_args(annotation)
+        return bool(args) and args[0] is str and "zstring" in args[1:]
+    return False
 
 
 def _contains_control(value: str) -> bool:
