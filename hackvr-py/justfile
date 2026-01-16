@@ -1,0 +1,9 @@
+test:
+    pytest
+
+lint:
+    ty check
+    ruff check
+
+package:
+    python -m build

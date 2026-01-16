@@ -9,7 +9,9 @@ def test_string_and_zstring():
     with pytest.raises(types.ParseError):
         types.parse_string("", False)
     assert types.parse_string("", True) is None
-    assert types.parse_zstring("", True) == ""
+    assert types.parse_zstring("", False) == ""
+    with pytest.raises(types.ParseError):
+        types.parse_zstring("", True)
 
 
 def test_int_float_bool():
@@ -24,8 +26,10 @@ def test_int_float_bool():
 
 
 def test_vectors_and_color():
-    assert types.parse_vec2("(1 2)", False) == (1.0, 2.0)
-    assert types.parse_vec3("( -1 0 3.5 )", False) == (-1.0, 0.0, 3.5)
+    vec2 = types.parse_vec2("(1 2)", False)
+    assert vec2 == types.Vec2(types.Float(1.0), types.Float(2.0))
+    vec3 = types.parse_vec3("( -1 0 3.5 )", False)
+    assert vec3 == types.Vec3(types.Float(-1.0), types.Float(0.0), types.Float(3.5))
     assert types.parse_color("#Aa00FF", False) == "#aa00ff"
     with pytest.raises(types.ParseError):
         types.parse_vec2("(1,2)", False)
@@ -33,6 +37,7 @@ def test_vectors_and_color():
 
 def test_bytes_any_uri():
     assert types.parse_bytes("ff" * 4, False, 4) == b"\xff\xff\xff\xff"
+    assert types.parse_bytes32("ff" * 32, False) == b"\xff" * 32
     assert types.parse_any("", False) == ""
     assert types.parse_uri("https://example.com", False) == "https://example.com"
     with pytest.raises(types.ParseError):
@@ -53,7 +58,8 @@ def test_identifiers_and_enums():
 
 def test_version_and_euler():
     assert types.parse_version("v12", False) == 12
-    assert types.parse_euler("(0 1 2)", False) == (0.0, 1.0, 2.0)
+    euler = types.parse_euler("(0 1 2)", False)
+    assert euler == types.Euler(types.Float(0.0), types.Float(1.0), types.Float(2.0))
     with pytest.raises(types.ParseError):
         types.parse_version("v0", False)
 

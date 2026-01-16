@@ -1,7 +1,5 @@
 import random
 
-import pytest
-
 from hackvr.common.stream import Parser, MAX_LINE_LENGTH
 
 
