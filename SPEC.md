@@ -153,6 +153,8 @@ Required success criteria:
 
 After a successful upgrade, the HackVR command stream begins **immediately after the HTTP headers** (after the blank line).
 
+Unlike raw `hackvr(s)://` connections, the HTTP-upgraded stream MUST NOT use `hackvr-hello`.
+
 Failure handling:
 
 - Viewer must display failure to the user.
@@ -165,14 +167,12 @@ Version signaling:
 
 Redirect token carriage:
 
-- Session/origin binding for HTTP uses the **initial URL components used for the connection attempt** (the URL the viewer started with), even if HTTP redirects occur before the final request that successfully upgrades.
-- Redirect token carriage (HTTP):
-  - The viewer may follow HTTP redirects when establishing an `http(s)+hackvr://` connection.
-  - If a session token is attached to the connection attempt (e.g., via URL fragment `#<token>`),
-    the viewer MUST carry that token through the entire redirect chain by sending the HTTP header:
-    `HackVr-Session: <session-token>` on the initial request and on every redirected follow-up request,
-    including the final request that successfully upgrades.
-  - URL fragments are never transmitted in HTTP; fragment handling is viewer-side only.
+- The viewer may follow HTTP redirects when establishing an `http(s)+hackvr://` connection.
+- If a session token is attached to the connection attempt (e.g., via URL fragment `#<token>`),
+  the viewer MUST carry that token through the entire redirect chain by sending the HTTP header:
+  `HackVr-Session: <session-token>` on the initial request and on every redirected follow-up request,
+  including the final request that successfully upgrades.
+- URL fragments are never transmitted in HTTP; fragment handling is viewer-side only.
 
 ### 2.4 Connection establishment — raw handshake (`hackvr-hello`)
 
@@ -608,7 +608,9 @@ When looking at the front of the sprite (so with a view direction of `(0 0 1)`),
 Hit-testing:
 
 - Sprite geometries are always treated like **two triangles forming a rectangle**.
-- They are **never hit-test transparent**.
+- Degenerate rectangles (size.x<=0 or size.y<=0) are not rendered and are not hit-testable.
+- Sprites never **never hit-test transparency**.
+  - Alpha/transparent pixels do not affect hit-testing.
 - All sprite geometries have implicitly tagged surfaces:
   - When picked with `tap-object`, the viewer must derive in the form `{X}-{Y}` with
     - `X` being an integer between 0 (left edge) and 100 (right edge)
@@ -627,6 +629,7 @@ Text geometries are sprites that display written text.
 - **S→C** `create-text-geometry <id:[]geom> <size:vec2> <uri:uri> <sha256:bytes[32]> <text:string> [<anchor:anchor>]`
   - `id` cannot be `$global`.
   - `size` is in local unscaled coordinates.
+  - x and y component of `size` must be positive; not negative and not zero.
   - (`uri`, `sha256`) is a font asset (see §6.1 Font Assets).
   - `text` is the text that shall be displayed on the geometry.
   - `anchor` defines the origin of the sprite (default: `center-center`).
@@ -655,6 +658,7 @@ Image geometries are sprites that display an image.
 - **S→C** `create-sprite-geometry <id:[]geom> <size:vec2> <uri:uri> <sha256:bytes[32]> [<size-mode:sizemode>] [<anchor:anchor>]`
   - `id` cannot be `$global`.
   - `size` is in local unscaled coordinates.
+  - x and y component of `size` must be positive; not negative and not zero.
   - (`uri`, `sha256`) is an image asset (see §6.2 Image Assets).
   - `size-mode` defines how the `size` may be adjusted depending on the image content (default: `stretch`).
   - `anchor` defines the origin of the sprite (default: `center-center`).
@@ -705,7 +709,7 @@ Lifecycle and hierarchy:
       - This means the object will potentially move visibly.
   - `child` cannot be `$global`.
   - Loops must not be formed.
-    - `parent` must not be `child` or any of it's children.
+    - `parent` must not be `child` or a descendant of `child`.
 
 Geometry attachment:
 
@@ -743,6 +747,7 @@ Transition semantics:
 - Time base: viewer monotonic clock; no server timestamps.
 - Channels are independent (pos/rot/scale).
 - Updating a channel always cancels previous transition on that channel.
+- If a channel is updated mid-transition, the new transition starts from the current interpolated value at command receipt time.
 - Omitted channel remains unchanged and continues its prior transition if any.
 - Guarantee: at the end of duration `t`, the object will be at the target transform.
 - During transition, motion is “close enough” for visual purposes; small drift due to jitter is acceptable.
@@ -1010,7 +1015,9 @@ Asset semantics:
 
 - Hash is over downloaded bytes.
 - Treat `(uri, sha256)` as distinct assets; same uri with different hash is different asset.
-- Viewer may cache by `(uri, hash)` or by hash only.
+- Viewers may cache by `(uri, hash)` or by hash only.
+- Viewers MAY ignore transport MIME types; decoding is based on the downloaded bytes, and `sha256` is authoritative.
+- Viewers are not required to cancel in-flight downloads when geometries/objects are destroyed; completed assets may remain cached.
 - Hash mismatch or download failure shows placeholder and continues; retry strategy is viewer-defined but should avoid DoS.
 
 ### 6.1) Font Assets
