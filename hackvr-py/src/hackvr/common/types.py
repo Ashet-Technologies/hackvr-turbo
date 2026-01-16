@@ -108,8 +108,6 @@ def parse_string(value: str, optional: bool) -> str | None:
 
 def parse_zstring(value: str, optional: bool) -> str:
     assert value is not None
-    if optional:
-        raise ParseError("zstring cannot be optional")
     raw = _optional_empty(value, optional, allow_empty=True)
     if raw is None:
         return ""

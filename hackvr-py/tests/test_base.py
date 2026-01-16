@@ -134,9 +134,11 @@ def test_execute_command_unknown_and_invalid():
     assert server.errors[1][0] == "optional-values"
 
 
-def test_zstring_cannot_be_optional():
-    with pytest.raises(TypeError):
-        class BadZstring(ProtocolBase):
-            @command("bad-zstring")
-            def bad_zstring(self, value: types.ZString | None) -> None:
-                raise NotImplementedError
+def test_optional_zstring_is_allowed():
+    class OptionalZstring(ProtocolBase):
+        @command("optional-zstring")
+        def optional_zstring(self, value: types.ZString | None) -> None:
+            raise NotImplementedError
+
+        def handle_error(self, cmd: str, message: str, args: list[str]) -> None:
+            raise NotImplementedError

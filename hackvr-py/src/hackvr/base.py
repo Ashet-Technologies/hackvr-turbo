@@ -53,9 +53,9 @@ class ProtocolBase(ABC):
             for param in parameters[1:]:
                 annotation = type_hints.get(param.name, str)
                 optional, inner = _unwrap_optional(annotation)
-                if optional and types.is_zstring_annotation(inner):
+                if optional and _is_list_annotation(inner):
                     raise TypeError(
-                        f"@command {command_name} cannot use optional zstring"
+                        f"@command {command_name} cannot use optional list parameters"
                     )
             cls._command_specs[command_name] = _CommandSpec(
                 name=command_name,
@@ -98,6 +98,12 @@ class ProtocolBase(ABC):
         for index, param in enumerate(spec.parameters):
             annotation = type_hints.get(param.name, str)
             optional, inner = _unwrap_optional(annotation)
+            if _is_list_annotation(inner):
+                if index != len(spec.parameters) - 1:
+                    raise ValueError("list parameters must be last")
+                remaining = args[index:] if index < len(args) else []
+                parsed_args.append(self._parse_list(inner, remaining))
+                return parsed_args
             value = args[index] if index < len(args) else ""
             if not optional:
                 assert value is not None
@@ -139,6 +145,29 @@ class ProtocolBase(ABC):
             raise ValueError(f"unsupported type annotation: {annotation!r}")
         return parser(value, optional)
 
+    def _parse_list(self, annotation: Any, values: list[str]) -> list[Any]:
+        inner = _list_inner(annotation)
+        if inner is None:
+            raise ValueError("unsupported list annotation")
+        origin = get_origin(inner)
+        if origin is tuple:
+            typeset = get_args(inner)
+            if not typeset:
+                return []
+            if len(values) % len(typeset) != 0:
+                raise ValueError("list tuple payload does not align")
+            output = []
+            for offset in range(0, len(values), len(typeset)):
+                chunk = values[offset : offset + len(typeset)]
+                output.append(
+                    tuple(
+                        self._parse_value(type_hint, chunk_value, False)
+                        for type_hint, chunk_value in zip(typeset, chunk, strict=False)
+                    )
+                )
+            return output
+        return [self._parse_value(inner, item, False) for item in values]
+
 
 def _unwrap_optional(annotation: Any) -> tuple[bool, Any]:
     origin = get_origin(annotation)
@@ -150,3 +179,16 @@ def _unwrap_optional(annotation: Any) -> tuple[bool, Any]:
             inner = args[0] if args[1] is type(None) else args[1]
             return True, inner
     return False, annotation
+
+
+def _is_list_annotation(annotation: Any) -> bool:
+    return get_origin(annotation) is list
+
+
+def _list_inner(annotation: Any) -> Any | None:
+    if get_origin(annotation) is not list:
+        return None
+    args = get_args(annotation)
+    if len(args) != 1:
+        return None
+    return args[0]

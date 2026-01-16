@@ -11,8 +11,7 @@ def test_string_and_zstring():
         types.parse_string("", False)
     assert types.parse_string("", True) is None
     assert types.parse_zstring("", False) == ""
-    with pytest.raises(types.ParseError):
-        types.parse_zstring("", True)
+    assert types.parse_zstring("", True) == ""
 
 
 def test_int_float_bool():
