@@ -1,0 +1,5 @@
+build
+ruff
+ty
+pytest
+raylib

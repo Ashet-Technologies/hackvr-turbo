@@ -1,0 +1,97 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hackvr-client-py"
+version = "0.1.0"
+description = "HackVR client"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["raylib"]
+
+[project.scripts]
+hackvr-client-py = "hackvr_client_py.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 140
+fix = false
+
+[tool.ruff.format]
+line-ending = "lf"
+
+[tool.ruff.lint]
+select = [
+    "B",      # Bugbear
+    "E",      # pycodestyle (errors)
+    "W",      # pycodestyle (warnings)
+    "F",      # pyflakes
+    "PL",     # pylint
+    "N",      # naming
+    "TC",     # basic type checking
+    "YTT",    # invalid/bad version checks
+    "ASYNC",  # checks related to async code
+    "BLE001", # Do not catch blind exception: {name}
+    "FA",     # Checks related to "from __future__ import annotations"
+    "ISC",    # check for implicit string concatenations (most likely bugs)
+    "LOG",    # check for logging sanity
+    "G",      # check for unnecessary logging format
+    "PIE",    # check for unnecessary code
+    "T201",   # "print" found
+    "T203",   # "pprint" found
+    "RET",    # check return rules
+    "SIM",    # code simplifications
+    "SLOT",   # missing __slots__ in certain subclasses
+    "TID",    # tidier imports
+    "PTH",    # use pathlib over OS functions
+    "ARG",    # unused function args
+    "PERF",   # gotta go fast
+    "RUF",    # ruff rules
+    "TRY",    # tryceratops exception handling antipatterns
+    "ANN",    # type annotations
+    "UP",     # pyupgrade
+    "FURB",   # refurbish rules
+    "D",      # docstring validation
+
+    # "FBT",    # Disallow positional boolean parameters
+    # "DOC", # docstring validation, include when everything else is done
+]
+
+
+ignore = [
+    "E501",    # Line too long ({width} > {limit})
+    "TID252",  # Prefer absolute imports over relative imports from parent modules
+    "SIM103",  # returning complex IF chains is often more readable than returning the last condition (breaks symmetry)
+    "PLR0912", # functions too complex
+    "PLR0915", # too many statements
+    "PLR0911", # too many return statements
+    "PLR0913", # too many arguments in init
+    "TRY003",  # long exception messages should not be in the ctor
+
+    "D203",    # We want to have no blank line before doc string 
+    "D212",    # We want doc string content to not start in the same line as the """
+
+    # TODO: When SPEC is done, enable:
+    "D102",    # Missing docstring in public method
+    "D103",    # Missing docstring in public function
+    "D107",    # Missing docstring in `__init__`
+
+]
+
+exclude = [
+    "tests/**/*.py" # ignore unit test code
+]
+
+[tool.ruff.lint.flake8-implicit-str-concat]
+allow-multiline = false
+
+[tool.ty.environment]
+python-version = "3.12"
