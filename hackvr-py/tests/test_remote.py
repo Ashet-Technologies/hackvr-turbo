@@ -6,7 +6,7 @@ from hackvr import RemoteClient, RemoteServer
 from hackvr.common import types
 
 
-class TestRemoteServer(RemoteServer):
+class _TestRemoteServer(RemoteServer):
     def __init__(self, expected: list[bytes]) -> None:
         self.expected = expected
 
@@ -14,7 +14,7 @@ class TestRemoteServer(RemoteServer):
         assert data == self.expected.pop(0)
 
 
-class TestRemoteClient(RemoteClient):
+class _TestRemoteClient(RemoteClient):
     def __init__(self, expected: list[bytes]) -> None:
         self.expected = expected
 
@@ -39,7 +39,7 @@ def test_remote_server_serialization() -> None:
         b"raycast-cancel\r\n",
     ]
 
-    server = TestRemoteServer(expected)
+    server = _TestRemoteServer(expected)
     server.chat("hello")
     server.set_user(types.UserID("user-1"))
     server.authenticate(types.UserID("user-1"), signature)
@@ -88,7 +88,7 @@ def test_remote_client_serialization() -> None:
         b"set-background-color\t#ff00ff\r\n",
     ]
 
-    client = TestRemoteClient(expected)
+    client = _TestRemoteClient(expected)
     client.request_user(None)
     client.request_authentication(types.UserID("user-1"), nonce)
     client.announce_session(token, None)

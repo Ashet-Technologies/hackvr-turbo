@@ -72,10 +72,14 @@ ignore = [
     "PLR0913", # too many arguments in init
     "TRY003",  # long exception messages should not be in the ctor
 
+    "D203",    # We want to have no blank line before doc string 
+    "D212",    # We want doc string content to not start in the same line as the """
+
     # TODO: When SPEC is done, enable:
     "D102",    # Missing docstring in public method
     "D103",    # Missing docstring in public function
     "D107",    # Missing docstring in `__init__`
+
 ]
 
 exclude = [
