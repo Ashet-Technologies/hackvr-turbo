@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from .stream import MAX_LINE_LENGTH, _is_valid_name, _is_valid_param
 
 
-def encode(cmd: str, params: list[str]) -> bytes:
+def encode(cmd: str, params: Sequence[str]) -> bytes:
     normalized_cmd = _normalize(cmd)
     normalized_params = [_normalize(param) for param in params]
 

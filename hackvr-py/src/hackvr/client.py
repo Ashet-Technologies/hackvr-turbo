@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
-from .base import ProtocolBase, command
+from .base import (
+    ProtocolBase,
+    RemoteBase,
+    _serialize_bytes,
+    _serialize_enum,
+    _serialize_session_token,
+    _serialize_vec3,
+    command,
+)
 from .common import types
 
 
 class Client(ProtocolBase):
-    @command("hackvr-hello")
-    def hackvr_hello(self, max_version: types.Version) -> None:
-        raise NotImplementedError
-
     @command("chat")
     def chat(self, user: types.UserID, message: str) -> None:
         raise NotImplementedError
@@ -205,3 +209,49 @@ class Client(ProtocolBase):
     @command("set-background-color")
     def set_background_color(self, color: types.Color) -> None:
         raise NotImplementedError
+
+
+class RemoteServer(RemoteBase):
+    def chat(self, message: str) -> None:
+        self.send_cmd("chat", message)
+
+    def set_user(self, user: types.UserID) -> None:
+        self.send_cmd("set-user", str(user))
+
+    def authenticate(self, user: types.UserID, signature: types.Bytes64) -> None:
+        self.send_cmd("authenticate", str(user), _serialize_bytes(signature))
+
+    def resume_session(self, token: types.SessionToken) -> None:
+        self.send_cmd("resume-session", _serialize_session_token(token))
+
+    def send_input(self, text: types.ZString) -> None:
+        self.send_cmd("send-input", text)
+
+    def tap_object(
+        self,
+        obj: types.ObjectID,
+        kind: types.TapKind,
+        tag: types.Tag,
+    ) -> None:
+        self.send_cmd(
+            "tap-object",
+            str(obj),
+            _serialize_enum(kind),
+            str(tag),
+        )
+
+    def tell_object(self, obj: types.ObjectID, text: types.ZString) -> None:
+        self.send_cmd("tell-object", str(obj), text)
+
+    def intent(self, intent_id: types.IntentID, view_dir: types.Vec3) -> None:
+        self.send_cmd("intent", str(intent_id), _serialize_vec3(view_dir))
+
+    def raycast(self, origin: types.Vec3, direction: types.Vec3) -> None:
+        self.send_cmd(
+            "raycast",
+            _serialize_vec3(origin),
+            _serialize_vec3(direction),
+        )
+
+    def raycast_cancel(self) -> None:
+        self.send_cmd("raycast-cancel")
