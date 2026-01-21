@@ -1,0 +1,4 @@
+[
+  { "cmd": [ "create-geometry", "foo" ], "delay": 0.1 },
+  { "cmd": [ "destroy-geometry", "foo" ], "delay": 0.1 }
+]
