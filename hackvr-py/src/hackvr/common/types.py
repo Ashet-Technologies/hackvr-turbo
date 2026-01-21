@@ -367,9 +367,9 @@ def _parse_vec(value: str, optional: bool, count: int):
     raw = _optional_empty(value, optional, allow_empty=False)
     if raw is None:
         return None
-    if count == 2:
+    if count == 2:  # noqa: PLR2004
         pattern = rf"^\(\s*({_FLOAT_BODY})\s+({_FLOAT_BODY})\s*\)$"
-    elif count == 3:
+    elif count == 3:  # noqa: PLR2004
         pattern = rf"^\(\s*({_FLOAT_BODY})\s+({_FLOAT_BODY})\s+({_FLOAT_BODY})\s*\)$"
     else:
         raise ValueError("unsupported vector length")

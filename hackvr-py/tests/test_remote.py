@@ -81,8 +81,7 @@ def test_remote_client_serialization() -> None:
         f"request-authentication\tuser-1\t{bytes(range(16)).hex()}\r\n".encode("utf-8"),
         f"announce-session\t{token_text}\t\r\n".encode("utf-8"),
         (
-            "add-triangle-list\tgeom-1\t\t#ff00ff\t(0 0 0)\t(1 0 0)\t(0 1 0)"
-            + "\t#00ff00\t(0 0 1)\t(1 0 1)\t(0 1 1)\r\n"
+            "add-triangle-list\tgeom-1\t\t#ff00ff\t(0 0 0)\t(1 0 0)\t(0 1 0)\t#00ff00\t(0 0 1)\t(1 0 1)\t(0 1 1)\r\n"
         ).encode("utf-8"),
         b"set-object-transform\tobj-1\t(0 1 2)\t\t(1 1 1)\t0.5\r\n",
         b"enable-free-look\ttrue\r\n",

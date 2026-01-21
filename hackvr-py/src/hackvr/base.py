@@ -56,9 +56,7 @@ class ProtocolBase(ABC):
                 annotation = type_hints.get(param.name, str)
                 optional, inner = _unwrap_optional(annotation)
                 if optional and _is_list_annotation(inner):
-                    raise TypeError(
-                        f"@command {command_name} cannot use optional list parameters"
-                    )
+                    raise TypeError(f"@command {command_name} cannot use optional list parameters")
             cls._command_specs[command_name] = _CommandSpec(
                 name=command_name,
                 method_name=attr_name,
@@ -202,11 +200,11 @@ def _serialize_vec2(value: types.Vec2) -> str:
 
 
 def _serialize_vec3(value: types.Vec3) -> str:
-    return f"({_format_float(value.x)} {_format_float(value.y)} {_format_float(value.z)})"  # noqa: E501
+    return f"({_format_float(value.x)} {_format_float(value.y)} {_format_float(value.z)})"
 
 
 def _serialize_euler(value: types.Euler) -> str:
-    return f"({_format_float(value.pan)} {_format_float(value.tilt)} {_format_float(value.roll)})"  # noqa: E501
+    return f"({_format_float(value.pan)} {_format_float(value.tilt)} {_format_float(value.roll)})"
 
 
 def _serialize_enum(value: Enum) -> str:
