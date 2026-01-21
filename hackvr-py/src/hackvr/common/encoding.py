@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from .stream import MAX_LINE_LENGTH, _is_valid_name, _is_valid_param
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
 def encode(cmd: str, params: Sequence[str]) -> bytes:

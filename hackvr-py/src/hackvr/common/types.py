@@ -8,8 +8,11 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from enum import Enum
-from typing import Annotated, Callable, NewType, get_args, get_origin
+from typing import TYPE_CHECKING, Annotated, NewType, cast, get_args, get_origin
 from urllib.parse import urlsplit
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 _FLOAT_BODY = r"-?\d+(?:\.\d+)?"
 _FLOAT_RE = re.compile(rf"^{_FLOAT_BODY}$")
@@ -19,6 +22,11 @@ _HEX_RE = re.compile(r"^[0-9a-fA-F]+$")
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_]+(-[A-Za-z0-9_]+)*$")
 _RESERVED_RE = re.compile(r"^\$[A-Za-z0-9_]+(-[A-Za-z0-9_]+)*$")
+_USER_ID_MAX_LENGTH = 128
+_SESSION_TOKEN_LENGTH = 43
+_SESSION_TOKEN_BYTES_LENGTH = 32
+_VECTOR2_COMPONENTS = 2
+_VECTOR3_COMPONENTS = 3
 
 String = str
 ZString = Annotated[str, "zstring"]
@@ -38,11 +46,15 @@ SessionToken = NewType("SessionToken", bytes)
 
 
 class TapKind(Enum):
+    """Tap input kinds."""
+
     PRIMARY = "primary"
     SECONDARY = "secondary"
 
 
 class SizeMode(Enum):
+    """Sprite sizing modes."""
+
     STRETCH = "stretch"
     COVER = "cover"
     CONTAIN = "contain"
@@ -51,16 +63,22 @@ class SizeMode(Enum):
 
 
 class TrackMode(Enum):
+    """Object tracking modes."""
+
     PLANE = "plane"
     FOCUS = "focus"
 
 
 class ReparentMode(Enum):
+    """Object reparenting modes."""
+
     WORLD = "world"
     LOCAL = "local"
 
 
 class Anchor(Enum):
+    """Anchor positions for UI elements."""
+
     TOP_LEFT = "top-left"
     TOP_CENTER = "top-center"
     TOP_RIGHT = "top-right"
@@ -74,12 +92,16 @@ class Anchor(Enum):
 
 @dataclass(frozen=True)
 class Vec2:
+    """2D vector."""
+
     x: float
     y: float
 
 
 @dataclass(frozen=True)
 class Vec3:
+    """3D vector."""
+
     x: float
     y: float
     z: float
@@ -87,6 +109,8 @@ class Vec3:
 
 @dataclass(frozen=True)
 class Euler:
+    """Euler rotation in degrees."""
+
     pan: float
     tilt: float
     roll: float
@@ -147,11 +171,11 @@ def parse_bool(value: str, optional: bool) -> bool | None:
 
 
 def parse_vec2(value: str, optional: bool) -> Vec2 | None:
-    return _parse_vec(value, optional, count=2)
+    return cast("Vec2 | None", _parse_vec(value, optional, count=_VECTOR2_COMPONENTS))
 
 
 def parse_vec3(value: str, optional: bool) -> Vec3 | None:
-    return _parse_vec(value, optional, count=3)
+    return cast("Vec3 | None", _parse_vec(value, optional, count=_VECTOR3_COMPONENTS))
 
 
 def parse_color(value: str, optional: bool) -> Color | None:
@@ -233,7 +257,7 @@ def parse_userid(value: str, optional: bool) -> UserID | None:
         raise ParseError("userid contains LF")
     if raw != raw.strip():
         raise ParseError("userid has leading/trailing whitespace")
-    if len(raw) >= 128:
+    if len(raw) >= _USER_ID_MAX_LENGTH:
         raise ParseError("userid too long")
     return UserID(raw)
 
@@ -313,7 +337,7 @@ def parse_version(value: str, optional: bool) -> Version | None:
 
 
 def parse_euler(value: str, optional: bool) -> Euler | None:
-    vector = _parse_vec(value, optional, count=3)
+    vector = cast("Vec3 | None", _parse_vec(value, optional, count=_VECTOR3_COMPONENTS))
     if vector is None:
         return None
     return Euler(vector.x, vector.y, vector.z)
@@ -324,7 +348,7 @@ def parse_session_token(value: str, optional: bool) -> SessionToken | None:
     raw = _optional_empty(value, optional, allow_empty=False)
     if raw is None:
         return None
-    if len(raw) != 43:
+    if len(raw) != _SESSION_TOKEN_LENGTH:
         raise ParseError("invalid session token length")
     if not re.fullmatch(r"[A-Za-z0-9_-]+", raw):
         raise ParseError("invalid session token characters")
@@ -333,7 +357,7 @@ def parse_session_token(value: str, optional: bool) -> SessionToken | None:
         decoded = base64.urlsafe_b64decode(padded)
     except (ValueError, binascii.Error) as exc:
         raise ParseError("invalid session token") from exc
-    if len(decoded) != 32:
+    if len(decoded) != _SESSION_TOKEN_BYTES_LENGTH:
         raise ParseError("invalid session token bytes")
     return SessionToken(decoded)
 
@@ -362,14 +386,14 @@ def _parse_enum(value: str, optional: bool, allowed: set[str]) -> str | None:
     return raw
 
 
-def _parse_vec(value: str, optional: bool, count: int):
+def _parse_vec(value: str, optional: bool, count: int) -> Vec2 | Vec3 | None:
     assert value is not None
     raw = _optional_empty(value, optional, allow_empty=False)
     if raw is None:
         return None
-    if count == 2:  # noqa: PLR2004
+    if count == _VECTOR2_COMPONENTS:
         pattern = rf"^\(\s*({_FLOAT_BODY})\s+({_FLOAT_BODY})\s*\)$"
-    elif count == 3:  # noqa: PLR2004
+    elif count == _VECTOR3_COMPONENTS:
         pattern = rf"^\(\s*({_FLOAT_BODY})\s+({_FLOAT_BODY})\s+({_FLOAT_BODY})\s*\)$"
     else:
         raise ValueError("unsupported vector length")
@@ -377,7 +401,7 @@ def _parse_vec(value: str, optional: bool, count: int):
     if not match:
         raise ParseError("invalid vector")
     numbers = [float(group) for group in match.groups()]
-    if count == 2:
+    if count == _VECTOR2_COMPONENTS:
         return Vec2(numbers[0], numbers[1])
     return Vec3(numbers[0], numbers[1], numbers[2])
 
