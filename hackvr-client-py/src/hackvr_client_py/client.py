@@ -109,11 +109,11 @@ def run_client(address: str) -> None:
     rl.set_target_fps(60)
 
     camera = rl.Camera3D(
-        position=rl.Vector3(5.0, 4.0, 5.0),
-        target=rl.Vector3(0.0, 0.0, 0.0),
-        up=rl.Vector3(0.0, 1.0, 0.0),
-        fovy=45.0,
-        projection=rl.CAMERA_PERSPECTIVE,
+        rl.Vector3(5.0, 4.0, 5.0),  # position
+        rl.Vector3(0.0, 0.0, 0.0),  # target
+        rl.Vector3(0.0, 1.0, 0.0),  # up
+        45.0,  # fovy
+        rl.CAMERA_PERSPECTIVE,  # projection
     )
     camera_state = CameraState(yaw=0.7, pitch=0.3)
 
