@@ -6,23 +6,30 @@ import base64
 import inspect
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from enum import Enum
-from types import UnionType
-from typing import Any, Callable, Union, get_args, get_origin, get_type_hints
+from types import FunctionType, UnionType
+from typing import TYPE_CHECKING, ClassVar, TypeVar, Union, get_args, get_origin, get_type_hints
 
 from .common import encoding, types
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from collections.abc import Sequence
+    from enum import Enum
+
+_OPTIONAL_UNION_LENGTH = 2
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True)
 class _CommandSpec:
     name: str
     method_name: str
-    func: Callable[..., None]
+    func: FunctionType
     parameters: list[inspect.Parameter]
 
 
-def command(name: str) -> Callable[[Callable[..., None]], Callable[..., None]]:
-    def decorator(func: Callable[..., None]) -> Callable[..., None]:
+def command(name: str) -> Callable[[FunctionType], FunctionType]:
+    def decorator(func: FunctionType) -> FunctionType:
         setattr(func, "__command_name__", name)  # noqa: B010
         setattr(func, "__isabstractmethod__", True)  # noqa: B010
         return func
@@ -31,9 +38,12 @@ def command(name: str) -> Callable[[Callable[..., None]], Callable[..., None]]:
 
 
 class ProtocolBase(ABC):
-    _command_specs: dict[str, _CommandSpec] = {}
+    """Base class for HackVR protocol handlers."""
+
+    _command_specs: ClassVar[dict[str, _CommandSpec]] = {}
 
     def __init_subclass__(cls) -> None:
+        """Collect @command handlers defined on a subclass."""
         super().__init_subclass__()
         cls._command_specs = {}
         for attr_name, attr in cls.__dict__.items():
@@ -51,7 +61,11 @@ class ProtocolBase(ABC):
             parameters = list(signature.parameters.values())
             if not parameters or parameters[0].name != "self":
                 raise TypeError(f"@command {command_name} must be an instance method")
-            type_hints = get_type_hints(attr, include_extras=True)
+            type_hints = get_type_hints(
+                attr,
+                include_extras=True,
+                globalns=_type_hint_globals(attr),
+            )
             for param in parameters[1:]:
                 annotation = type_hints.get(param.name, str)
                 optional, inner = _unwrap_optional(annotation)
@@ -92,9 +106,13 @@ class ProtocolBase(ABC):
                 return command_specs[cmd]
         return None
 
-    def _parse_args(self, spec: _CommandSpec, args: list[str]) -> list[Any]:
-        type_hints = get_type_hints(spec.func, include_extras=True)
-        parsed_args: list[Any] = []
+    def _parse_args(self, spec: _CommandSpec, args: list[str]) -> list[object]:
+        type_hints = get_type_hints(
+            spec.func,
+            include_extras=True,
+            globalns=_type_hint_globals(spec.func),
+        )
+        parsed_args: list[object] = []
         for index, param in enumerate(spec.parameters):
             annotation = type_hints.get(param.name, str)
             optional, inner = _unwrap_optional(annotation)
@@ -110,10 +128,10 @@ class ProtocolBase(ABC):
             parsed_args.append(self._parse_value(inner, value, optional))
         return parsed_args
 
-    def _parse_value(self, annotation: Any, value: str, optional: bool) -> Any:
+    def _parse_value(self, annotation: object, value: str, optional: bool) -> object:
         if types.is_zstring_annotation(annotation):
             return types.parse_zstring(value, optional)
-        parser_map: dict[Any, Callable[[str, bool], Any]] = {
+        parser_map: dict[object, Callable[[str, bool], object]] = {
             str: types.parse_string,
             int: types.parse_int,
             float: types.parse_float,
@@ -145,7 +163,7 @@ class ProtocolBase(ABC):
             raise ValueError(f"unsupported type annotation: {annotation!r}")
         return parser(value, optional)
 
-    def _parse_list(self, annotation: Any, values: list[str]) -> list[Any]:
+    def _parse_list(self, annotation: object, values: list[str]) -> list[object]:
         inner = _list_inner(annotation)
         if inner is None:
             raise ValueError("unsupported list annotation")
@@ -156,7 +174,7 @@ class ProtocolBase(ABC):
                 return []
             if len(values) % len(typeset) != 0:
                 raise ValueError("list tuple payload does not align")
-            output = []
+            output: list[object] = []
             for offset in range(0, len(values), len(typeset)):
                 chunk = values[offset : offset + len(typeset)]
                 output.append(
@@ -170,6 +188,8 @@ class ProtocolBase(ABC):
 
 
 class RemoteBase(ABC):
+    """Base class for HackVR protocol senders."""
+
     @abstractmethod
     def send_packet(self, data: bytes) -> None:
         raise NotImplementedError
@@ -220,15 +240,15 @@ def _serialize_session_token(value: types.SessionToken) -> str:
     return encoded.rstrip("=")
 
 
-def _serialize_optional(value: Any, serializer: Callable[[Any], str]) -> str:
+def _serialize_optional(value: _T | None, serializer: Callable[[_T], str]) -> str:
     if value is None:
         return ""
     return serializer(value)
 
 
 def _serialize_tuple_list(
-    values: list[tuple[Any, ...]],
-    serializers: list[Callable[[Any], str]],
+    values: Sequence[tuple[object, ...]],
+    serializers: Sequence[Callable[[object], str]],
 ) -> list[str]:
     output: list[str] = []
     for item in values:
@@ -239,26 +259,32 @@ def _serialize_tuple_list(
     return output
 
 
-def _unwrap_optional(annotation: Any) -> tuple[bool, Any]:
+def _unwrap_optional(annotation: object) -> tuple[bool, object]:
     origin = get_origin(annotation)
     if origin is None:
         return False, annotation
     if origin in (Union, UnionType):
         args = get_args(annotation)
-        if len(args) == 2 and type(None) in args:
+        if len(args) == _OPTIONAL_UNION_LENGTH and type(None) in args:
             inner = args[0] if args[1] is type(None) else args[1]
             return True, inner
     return False, annotation
 
 
-def _is_list_annotation(annotation: Any) -> bool:
+def _is_list_annotation(annotation: object) -> bool:
     return get_origin(annotation) is list
 
 
-def _list_inner(annotation: Any) -> Any | None:
+def _list_inner(annotation: object) -> object | None:
     if get_origin(annotation) is not list:
         return None
     args = get_args(annotation)
     if len(args) != 1:
         return None
     return args[0]
+
+
+def _type_hint_globals(func: FunctionType) -> dict[str, object]:
+    globals_map = dict(func.__globals__)
+    globals_map.setdefault("types", types)
+    return globals_map

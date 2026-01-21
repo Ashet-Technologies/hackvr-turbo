@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
 from itertools import product
-from typing import Callable, TypeVar
+from typing import TYPE_CHECKING, TypeVar
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
 
 _T = TypeVar("_T")
 
@@ -189,10 +191,7 @@ def _is_valid_group(part: str, allow_reserved: bool) -> bool:
     items = body.split(",")
     if any(item == "" for item in items):
         return False
-    for item in items:
-        if not _is_valid_part(item, allow_reserved=allow_reserved):
-            return False
-    return True
+    return all(_is_valid_part(item, allow_reserved=allow_reserved) for item in items)
 
 
 def _is_valid_part(part: str, allow_reserved: bool) -> bool:

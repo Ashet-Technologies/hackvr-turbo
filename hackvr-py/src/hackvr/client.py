@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from .base import (
     ProtocolBase,
     RemoteBase,
@@ -11,10 +13,14 @@ from .base import (
     _serialize_vec3,
     command,
 )
-from .common import types
+
+if TYPE_CHECKING:
+    from .common import types
 
 
 class Client(ProtocolBase):
+    """Client-side protocol handlers for server-to-client commands."""
+
     @command("chat")
     def chat(self, user: types.UserID, message: str) -> None:
         raise NotImplementedError
@@ -212,6 +218,8 @@ class Client(ProtocolBase):
 
 
 class RemoteServer(RemoteBase):
+    """Client-side helper for sending client-to-server commands."""
+
     def chat(self, message: str) -> None:
         self.send_cmd("chat", message)
 

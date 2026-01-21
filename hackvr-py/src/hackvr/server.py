@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast
+
 from .base import (
     ProtocolBase,
     RemoteBase,
@@ -17,10 +19,15 @@ from .base import (
     _serialize_vec3,
     command,
 )
-from .common import types
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+    from .common import types
 
 
 class Server(ProtocolBase):
+    """Server-side protocol handlers for client-to-server commands."""
+
     @command("chat")
     def chat(self, message: str) -> None:
         raise NotImplementedError
@@ -68,6 +75,8 @@ class Server(ProtocolBase):
 
 
 class RemoteClient(RemoteBase):
+    """Server-side helper for sending server-to-client commands."""
+
     def chat(self, user: types.UserID, message: str) -> None:
         self.send_cmd("chat", str(user), message)
 
@@ -146,9 +155,13 @@ class RemoteClient(RemoteBase):
         tag: types.Tag | None,
         triangles: list[tuple[types.Color, types.Vec3, types.Vec3, types.Vec3]],
     ) -> None:
+        serializers = cast(
+            "Sequence[Callable[[object], str]]",
+            [str, _serialize_vec3, _serialize_vec3, _serialize_vec3],
+        )
         triangle_params = _serialize_tuple_list(
             triangles,
-            [str, _serialize_vec3, _serialize_vec3, _serialize_vec3],
+            serializers,
         )
         self.send_cmd(
             "add-triangle-list",
