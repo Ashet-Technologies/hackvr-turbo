@@ -7,7 +7,7 @@ import inspect
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from types import FunctionType, UnionType
-from typing import TYPE_CHECKING, ClassVar, TypeVar, Union, get_args, get_origin, get_type_hints
+from typing import TYPE_CHECKING, ClassVar, Literal, TypeVar, Union, get_args, get_origin, get_type_hints
 
 from .common import encoding, types
 
@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from collections.abc import Sequence
     from enum import Enum
+    from urllib.parse import SplitResult
 
 _OPTIONAL_UNION_LENGTH = 2
 _T = TypeVar("_T")
@@ -26,6 +27,16 @@ class _CommandSpec:
     method_name: str
     func: FunctionType
     parameters: list[inspect.Parameter]
+
+
+@dataclass(frozen=True)
+class ConnectionToken:
+    """Metadata describing an established connection."""
+
+    source_url: SplitResult
+    session_token: types.SessionToken | None
+    protocol: Literal["hackvr", "hackvrs", "http+hackvr", "https+hackvr"]
+    is_secure: bool
 
 
 def command(name: str) -> Callable[[FunctionType], FunctionType]:
