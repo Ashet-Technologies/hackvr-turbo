@@ -3,8 +3,6 @@ from __future__ import annotations
 import base64
 from typing import Optional
 
-import pytest
-
 from hackvr.base import ProtocolBase, command
 from hackvr.common import types
 

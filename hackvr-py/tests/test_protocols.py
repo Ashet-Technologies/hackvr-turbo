@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import base64
-
 from hackvr import Client, Server
 from hackvr.common import types
 
 SERVER_COMMANDS = {
-    "hackvr-hello",
     "chat",
     "set-user",
     "authenticate",
@@ -20,7 +17,6 @@ SERVER_COMMANDS = {
 }
 
 CLIENT_COMMANDS = {
-    "hackvr-hello",
     "chat",
     "request-user",
     "request-authentication",
@@ -87,14 +83,13 @@ def test_server_dispatch():
     server.calls = []
     server.errors = []
 
-    token = base64.urlsafe_b64encode(bytes(range(32))).decode("ascii").rstrip("=")
-    server.execute_command("hackvr-hello", ["v2", "hackvr://example.com", token])
     server.execute_command("chat", ["hello"])
+    server.execute_command("set-user", ["user-1"])
     server.execute_command("raycast-cancel", [])
 
     assert server.errors == []
-    assert server.calls[0][0] == "hackvr-hello"
-    assert server.calls[1][0] == "chat"
+    assert server.calls[0][0] == "chat"
+    assert server.calls[1][0] == "set-user"
     assert server.calls[2][0] == "raycast-cancel"
 
 

@@ -20,7 +20,10 @@ pythonpath = ["src"]
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B"]
+select = ["E", "F", "I", "B", "ISC"]
+
+[tool.ruff.lint.flake8-implicit-str-concat]
+allow-multiline = false
 
 [tool.ty.environment]
 python = "/root/.pyenv/versions/3.12.12/bin/python"

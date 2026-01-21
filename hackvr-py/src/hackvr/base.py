@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 import inspect
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from enum import Enum
 from types import UnionType
 from typing import Any, Callable, Union, get_args, get_origin, get_type_hints
 
-from .common import types
+from .common import encoding, types
 
 
 @dataclass(frozen=True)
@@ -167,6 +169,76 @@ class ProtocolBase(ABC):
                 )
             return output
         return [self._parse_value(inner, item, False) for item in values]
+
+
+class RemoteBase(ABC):
+    @abstractmethod
+    def send_packet(self, data: bytes) -> None:
+        raise NotImplementedError
+
+    def send_cmd(self, cmd: str, *params: str) -> None:
+        self.send_packet(encoding.encode(cmd, params))
+
+
+def _serialize_bool(value: bool) -> str:
+    return "true" if value else "false"
+
+
+def _format_float(value: float) -> str:
+    text = format(value, ".15f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    if text == "-0":
+        return "0"
+    return text
+
+
+def _serialize_float(value: float) -> str:
+    return _format_float(value)
+
+
+def _serialize_vec2(value: types.Vec2) -> str:
+    return f"({_format_float(value.x)} {_format_float(value.y)})"
+
+
+def _serialize_vec3(value: types.Vec3) -> str:
+    return f"({_format_float(value.x)} {_format_float(value.y)} {_format_float(value.z)})"  # noqa: E501
+
+
+def _serialize_euler(value: types.Euler) -> str:
+    return f"({_format_float(value.pan)} {_format_float(value.tilt)} {_format_float(value.roll)})"  # noqa: E501
+
+
+def _serialize_enum(value: Enum) -> str:
+    return value.value
+
+
+def _serialize_bytes(value: bytes) -> str:
+    return value.hex()
+
+
+def _serialize_session_token(value: types.SessionToken) -> str:
+    encoded = base64.urlsafe_b64encode(bytes(value)).decode("ascii")
+    return encoded.rstrip("=")
+
+
+def _serialize_optional(value: Any, serializer: Callable[[Any], str]) -> str:
+    if value is None:
+        return ""
+    return serializer(value)
+
+
+def _serialize_tuple_list(
+    values: list[tuple[Any, ...]],
+    serializers: list[Callable[[Any], str]],
+) -> list[str]:
+    output: list[str] = []
+    for item in values:
+        if len(item) != len(serializers):
+            raise ValueError("tuple length does not match serializers")
+        for serializer, value in zip(serializers, item, strict=True):
+            output.append(serializer(value))
+    return output
 
 
 def _unwrap_optional(annotation: Any) -> tuple[bool, Any]:
