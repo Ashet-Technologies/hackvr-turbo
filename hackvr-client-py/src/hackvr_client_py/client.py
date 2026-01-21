@@ -5,11 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import cos, sin
 from pathlib import Path
-from typing import Any, cast
 
-import raylib as _rl
-
-rl: Any = cast(Any, _rl)
+import pyray as rl
 
 
 @dataclass
