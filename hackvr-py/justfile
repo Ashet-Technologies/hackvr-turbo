@@ -1,7 +1,7 @@
 validate: lint test
 
 test:
-    pytest
+    pytest --cov=hackvr --cov-report=term-missing
 
 lint: lint-codestyle lint-types
 

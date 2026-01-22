@@ -9,3 +9,6 @@ and run those commands manually.
 Install the requirements from requirements.txt before running the commands.
 
 Use a virtual environment when possible.
+
+After changing code, always report the total code coverage (excluding tests/) in your final response.
+Code under hackvr-py/src must always have 100% test coverage.

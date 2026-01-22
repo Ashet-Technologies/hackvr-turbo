@@ -2,3 +2,8 @@ build
 ruff
 ty
 pytest
+pyopenssl
+cryptography
+requests
+pytest-cov
+coverage

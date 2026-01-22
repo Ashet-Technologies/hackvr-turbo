@@ -1,11 +1,18 @@
 import base64
 import random
+import ssl
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Any, cast
 
 import pytest
+import requests
+from OpenSSL import SSL
 
 from hackvr import net
 from hackvr.common import encoding, types
+from hackvr.tools import keygen
 
 
 class FakeNetStream(net.NetStream):
@@ -70,6 +77,15 @@ class FakeListener:
 
     def close(self) -> None:
         return None
+
+
+class InsecureConnector(net.DefaultConnector):
+    def __init__(self, context: SSL.Context) -> None:
+        super().__init__()
+        self._context = context
+
+    def connect_tls(self, host: str, port: int, context: object | None = None) -> net.NetStream:
+        return super().connect_tls(host, port, context=self._context)
 
 
 def _make_session_token() -> tuple[types.SessionToken, str]:
@@ -216,3 +232,214 @@ def test_http_read_until_times_out_with_slow_reads():
     stream = FakeNetStream(payload, chunk_sizes=[4, 4, 4, 4], sleep_s=0.02)
     with pytest.raises(TimeoutError):
         net._receive_http_request(stream, net.Deadline.from_now(s=0.01))
+
+
+def test_tls_certificate_generation_roundtrip_and_server(tmp_path):
+    cert_path = tmp_path / "cert.pem"
+    key_path = tmp_path / "key.pem"
+    certificate = keygen.generate_self_signed_certificate(common_name="localhost", valid_days=1)
+    certificate.save(cert_path, key_path)
+    loaded = net.TlsServerCertificate.from_files(cert_path, key_path)
+    assert loaded == certificate
+
+    saved_cert_path = tmp_path / "saved-cert.pem"
+    saved_key_path = tmp_path / "saved-key.pem"
+    loaded.save(saved_cert_path, saved_key_path)
+    reloaded = net.TlsServerCertificate.from_files(saved_cert_path, saved_key_path)
+    assert reloaded == loaded
+
+    listener = net.TlsListener("127.0.0.1", 0, reloaded)
+    port = listener._sock.getsockname()[1]
+    server = net.TlsServer("127.0.0.1", port, listener=listener)
+
+    context = SSL.Context(SSL.TLS_METHOD)
+    context.set_verify(SSL.VERIFY_NONE, lambda *_args: True)
+    client = net.Client(connector=InsecureConnector(context), hello_timeout=1.0)
+
+    server_peer = {}
+
+    def _accept() -> None:
+        peer, token = server.accept()
+        server_peer["token"] = token
+        peer.close()
+
+    thread = threading.Thread(target=_accept, daemon=True)
+    thread.start()
+    token = client.connect(f"hackvrs://127.0.0.1:{port}/world")
+    client.close()
+    thread.join(timeout=1.0)
+    server.close()
+
+    assert token.protocol == "hackvrs"
+    assert server_peer["token"].protocol == "hackvrs"
+
+
+def test_client_http_hackvr_connects():
+    server = net.HttpServer("127.0.0.1", 0)
+    listener = cast(net.RawListener, server._listener)
+    assert listener is not None
+    port = listener._sock.getsockname()[1]
+    client = net.Client(hello_timeout=1.0)
+    received: dict[str, net.ConnectionToken] = {}
+
+    def _accept() -> None:
+        peer, token = server.accept()
+        received["token"] = token
+        peer.close()
+
+    thread = threading.Thread(target=_accept, daemon=True)
+    thread.start()
+    token = client.connect(f"http+hackvr://127.0.0.1:{port}/world")
+    client.close()
+    thread.join(timeout=1.0)
+    server.close()
+
+    assert token.protocol == "http+hackvr"
+    assert received["token"].protocol == "http+hackvr"
+
+
+def test_client_https_hackvr_connects(tmp_path):
+    certificate = keygen.generate_self_signed_certificate(common_name="localhost", valid_days=1)
+    listener = net.TlsListener("127.0.0.1", 0, certificate)
+    port = listener._sock.getsockname()[1]
+    server = net.HttpsServer("127.0.0.1", port, listener=listener)
+    context = SSL.Context(SSL.TLS_METHOD)
+    context.set_verify(SSL.VERIFY_NONE, lambda *_args: True)
+    client = net.Client(connector=InsecureConnector(context), hello_timeout=1.0)
+    received: dict[str, net.ConnectionToken] = {}
+
+    def _accept() -> None:
+        peer, token = server.accept()
+        received["token"] = token
+        peer.close()
+
+    thread = threading.Thread(target=_accept, daemon=True)
+    thread.start()
+    token = client.connect(f"https+hackvr://127.0.0.1:{port}/world")
+    client.close()
+    thread.join(timeout=1.0)
+    server.close()
+
+    assert token.protocol == "https+hackvr"
+    assert received["token"].protocol == "https+hackvr"
+
+
+def _start_http_server() -> tuple[HTTPServer, int, dict[str, str]]:
+    captured: dict[str, str] = {}
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            captured.update({key.lower(): value for key, value in self.headers.items()})
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, format: str, *args: Any) -> None:
+            return None
+
+    server = HTTPServer(("127.0.0.1", 0), _Handler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, port, captured
+
+
+def _start_https_server(tmp_path) -> tuple[HTTPServer, int, dict[str, str]]:
+    captured: dict[str, str] = {}
+    cert_path = tmp_path / "server-cert.pem"
+    key_path = tmp_path / "server-key.pem"
+    certificate = keygen.generate_self_signed_certificate(common_name="localhost", valid_days=1)
+    certificate.save(cert_path, key_path)
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            captured.update({key.lower(): value for key, value in self.headers.items()})
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, format: str, *args: Any) -> None:
+            return None
+
+    server = HTTPServer(("127.0.0.1", 0), _Handler)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(certfile=cert_path, keyfile=key_path)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, port, captured
+
+
+def test_requests_to_http_hackvr_server_fails_upgrade():
+    server = net.HttpServer("127.0.0.1", 0)
+    listener = cast(net.RawListener, server._listener)
+    assert listener is not None
+    port = listener._sock.getsockname()[1]
+    results: dict[str, Exception] = {}
+
+    def _accept() -> None:
+        try:
+            server.accept()
+        except Exception as exc:
+            results["error"] = exc
+
+    thread = threading.Thread(target=_accept, daemon=True)
+    thread.start()
+    with pytest.raises(requests.RequestException):
+        requests.get(f"http://127.0.0.1:{port}/world", timeout=1)
+    thread.join(timeout=1.0)
+    server.close()
+
+    assert isinstance(results.get("error"), net.HandshakeError)
+
+
+def test_requests_to_https_hackvr_server_fails_upgrade(tmp_path):
+    certificate = keygen.generate_self_signed_certificate(common_name="localhost", valid_days=1)
+    listener = net.TlsListener("127.0.0.1", 0, certificate)
+    port = listener._sock.getsockname()[1]
+    server = net.HttpsServer("127.0.0.1", port, listener=listener)
+    results: dict[str, Exception] = {}
+
+    def _accept() -> None:
+        try:
+            server.accept()
+        except Exception as exc:
+            results["error"] = exc
+
+    thread = threading.Thread(target=_accept, daemon=True)
+    thread.start()
+    with pytest.raises(requests.RequestException):
+        requests.get(f"https://127.0.0.1:{port}/world", timeout=1, verify=False)
+    thread.join(timeout=1.0)
+    server.close()
+
+    assert isinstance(results.get("error"), net.HandshakeError)
+
+
+def test_client_http_hackvr_rejected_by_standard_http_server():
+    server, port, captured = _start_http_server()
+    client = net.Client(hello_timeout=1.0)
+    with pytest.raises(net.HandshakeError):
+        client.connect(f"http+hackvr://127.0.0.1:{port}/world")
+    client.close()
+    server.shutdown()
+    server.server_close()
+
+    assert captured.get("upgrade") == "hackvr"
+    assert "upgrade" in (captured.get("connection") or "").lower()
+
+
+def test_client_https_hackvr_rejected_by_standard_https_server(tmp_path):
+    server, port, captured = _start_https_server(tmp_path)
+    context = SSL.Context(SSL.TLS_METHOD)
+    context.set_verify(SSL.VERIFY_NONE, lambda *_args: True)
+    client = net.Client(connector=InsecureConnector(context), hello_timeout=1.0)
+    with pytest.raises(net.HandshakeError):
+        client.connect(f"https+hackvr://127.0.0.1:{port}/world")
+    client.close()
+    server.shutdown()
+    server.server_close()
+
+    assert captured.get("upgrade") == "hackvr"
+    assert "upgrade" in (captured.get("connection") or "").lower()
