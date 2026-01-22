@@ -5,16 +5,23 @@ from __future__ import annotations
 import base64
 import select
 import socket
-import ssl
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import ClassVar, Protocol
+from typing import TYPE_CHECKING, ClassVar, Protocol
 from urllib.parse import SplitResult, urlsplit, urlunsplit
+
+from OpenSSL import SSL
+from cryptography import x509
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import dsa, ec, ed25519, ed448, rsa
 
 from .base import ConnectionToken
 from .common import encoding, types
 from .common.stream import MAX_LINE_LENGTH, _is_valid_name, _is_valid_param
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 HACKVR_PORT = 1913
 HACKVRS_PORT = 19133
@@ -174,7 +181,7 @@ class RawNetStream(NetStream):
 class TlsNetStream(NetStream):
     """TLS-wrapped TCP stream."""
 
-    def __init__(self, sock: ssl.SSLSocket) -> None:
+    def __init__(self, sock: SSL.Connection) -> None:
         super().__init__()
         self._sock = sock
 
@@ -218,7 +225,7 @@ class StreamConnector(Protocol):
         self,
         host: str,
         port: int,
-        context: ssl.SSLContext | None = None,
+        context: SSL.Context | None = None,
     ) -> NetStream:
         """Create a TLS stream."""
 
@@ -234,11 +241,14 @@ class DefaultConnector:
         self,
         host: str,
         port: int,
-        context: ssl.SSLContext | None = None,
+        context: SSL.Context | None = None,
     ) -> NetStream:
         sock = socket.create_connection((host, port))
-        ssl_context = context or ssl.create_default_context()
-        tls_sock = ssl_context.wrap_socket(sock, server_hostname=host)
+        ssl_context = context or _default_tls_context()
+        tls_sock = SSL.Connection(ssl_context, sock)
+        tls_sock.set_tlsext_host_name(host.encode("utf-8"))
+        tls_sock.set_connect_state()
+        tls_sock.do_handshake()
         return TlsNetStream(tls_sock)
 
 
@@ -269,19 +279,37 @@ class RawListener:
         self._sock.close()
 
 
+@dataclass(frozen=True)
+class TlsServerCertificate:
+    """PEM-encoded TLS certificate and private key for servers."""
+
+    cert_pem: bytes
+    key_pem: bytes
+
+    @classmethod
+    def from_files(cls, cert_file: Path, key_file: Path) -> TlsServerCertificate:
+        return cls(cert_pem=cert_file.read_bytes(), key_pem=key_file.read_bytes())
+
+    def save(self, cert_file: Path, key_file: Path) -> None:
+        cert_file.write_bytes(self.cert_pem)
+        key_file.write_bytes(self.key_pem)
+
+
 class TlsListener:
     """TCP listener for TLS connections."""
 
-    def __init__(self, host: str, port: int, context: ssl.SSLContext) -> None:
+    def __init__(self, host: str, port: int, certificate: TlsServerCertificate) -> None:
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._sock.bind((host, port))
         self._sock.listen()
-        self._context = context
+        self._context = _build_tls_context(certificate)
 
     def accept(self) -> tuple[NetStream, tuple[str, int]]:
         conn, addr = self._sock.accept()
-        tls_conn = self._context.wrap_socket(conn, server_side=True)
+        tls_conn = SSL.Connection(self._context, conn)
+        tls_conn.set_accept_state()
+        tls_conn.do_handshake()
         return TlsNetStream(tls_conn), addr
 
     def close(self) -> None:
@@ -781,8 +809,36 @@ def _parse_headers(lines: list[str]) -> dict[str, str]:
     return headers
 
 
-def _wait_for_read(sock: socket.socket | ssl.SSLSocket, deadline: Deadline) -> bool:
+def _wait_for_read(sock: socket.socket | SSL.Connection, deadline: Deadline) -> bool:
     if deadline.is_infinite():
         return True
     ready, _w, _x = select.select([sock], [], [], deadline.get_remaining_s())
     return bool(ready)
+
+
+def _default_tls_context() -> SSL.Context:
+    context = SSL.Context(SSL.TLS_METHOD)
+    context.set_default_verify_paths()
+    context.set_verify(SSL.VERIFY_PEER, None)
+    return context
+
+
+def _build_tls_context(certificate: TlsServerCertificate) -> SSL.Context:
+    context = SSL.Context(SSL.TLS_METHOD)
+    cert = x509.load_pem_x509_certificate(certificate.cert_pem)
+    key = serialization.load_pem_private_key(certificate.key_pem, password=None)
+    if not isinstance(
+        key,
+        (
+            dsa.DSAPrivateKey,
+            ec.EllipticCurvePrivateKey,
+            ed25519.Ed25519PrivateKey,
+            ed448.Ed448PrivateKey,
+            rsa.RSAPrivateKey,
+        ),
+    ):
+        raise TypeError("Unsupported private key type for TLS context")
+    context.use_certificate(cert)
+    context.use_privatekey(key)
+    context.check_privatekey()
+    return context

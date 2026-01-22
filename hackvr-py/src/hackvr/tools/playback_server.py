@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import ssl
 import sys
 import threading
 import time
@@ -172,15 +171,14 @@ class PlaybackServer:
         scheme: str,
         commands: list[PlaybackCommand],
         output: TextIO,
-        tls_cert: Path | None = None,
-        tls_key: Path | None = None,
+        tls_cert: net.TlsServerCertificate | None = None,
     ) -> None:
         self._host = host
         self._port = port
         self._scheme = scheme
         self._commands = commands
         self._output = output
-        self._server = _create_server(host, port, scheme, tls_cert=tls_cert, tls_key=tls_key)
+        self._server = _create_server(host, port, scheme, tls_cert=tls_cert)
 
     def serve_forever(self) -> None:
         index = 0
@@ -200,18 +198,17 @@ def _create_server(
     port: int,
     scheme: str,
     *,
-    tls_cert: Path | None = None,
-    tls_key: Path | None = None,
+    tls_cert: net.TlsServerCertificate | None = None,
 ) -> net.Server:
     if scheme == "hackvr":
         return net.RawServer(host, port)
     if scheme == "hackvrs":
-        listener = _build_tls_listener(host, port, tls_cert=tls_cert, tls_key=tls_key)
+        listener = _build_tls_listener(host, port, tls_cert=tls_cert)
         return net.TlsServer(host, port, listener=listener)
     if scheme == "http+hackvr":
         return net.HttpServer(host, port)
     if scheme == "https+hackvr":
-        listener = _build_tls_listener(host, port, tls_cert=tls_cert, tls_key=tls_key)
+        listener = _build_tls_listener(host, port, tls_cert=tls_cert)
         return net.HttpsServer(host, port, listener=listener)
     raise ValueError(f"Unsupported scheme: {scheme}")
 
@@ -220,14 +217,11 @@ def _build_tls_listener(
     host: str,
     port: int,
     *,
-    tls_cert: Path | None,
-    tls_key: Path | None,
+    tls_cert: net.TlsServerCertificate | None,
 ) -> net.TlsListener:
-    if tls_cert is None or tls_key is None:
+    if tls_cert is None:
         raise ValueError("TLS schemes require --tls-cert and --tls-key")
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.load_cert_chain(certfile=tls_cert, keyfile=tls_key)
-    return net.TlsListener(host, port, context)
+    return net.TlsListener(host, port, tls_cert)
 
 
 def _load_commands(path: Path) -> list[PlaybackCommand]:
@@ -290,14 +284,18 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     commands = _load_commands(args.json)
     port = args.port or _DEFAULT_PORTS[args.scheme]
+    tls_cert = None
+    if args.tls_cert is not None or args.tls_key is not None:
+        if args.tls_cert is None or args.tls_key is None:
+            raise ValueError("--tls-cert and --tls-key must be provided together")
+        tls_cert = net.TlsServerCertificate.from_files(args.tls_cert, args.tls_key)
     server = PlaybackServer(
         host=args.host,
         port=port,
         scheme=args.scheme,
         commands=commands,
         output=sys.stdout,
-        tls_cert=args.tls_cert,
-        tls_key=args.tls_key,
+        tls_cert=tls_cert,
     )
     server.serve_forever()
     return 0

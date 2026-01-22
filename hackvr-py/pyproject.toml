@@ -8,9 +8,14 @@ version = "0.1.0"
 description = "HackVR protocol helpers"
 readme = "README.md"
 requires-python = ">=3.12"
+dependencies = [
+    "cryptography",
+    "pyopenssl",
+]
 
 [project.scripts]
 hackvr-playback-server = "hackvr.tools.playback_server:main"
+hackvr-keygen = "hackvr.tools.keygen:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
