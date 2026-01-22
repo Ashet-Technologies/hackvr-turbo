@@ -49,6 +49,14 @@ def test_parser_ignores_overlength_line_with_terminator():
     assert parser.pull() is None
 
 
+def test_parser_ignores_overlength_line_then_parses_following():
+    parser = Parser()
+    line = b"a" * (MAX_LINE_LENGTH - 1)
+    parser.push(line + b"\r\n")
+    parser.push(b"ok\tvalue\r\n")
+    assert parser.pull() == ["ok", "value"]
+
+
 def test_parser_handles_consecutive_commands():
     parser = Parser()
     parser.push(b"a\tb\r\nc\r\n")
@@ -61,6 +69,33 @@ def test_parser_handles_large_push():
     parser.push(b"a" * 4096)
     parser.push(b"\r\nping\r\n")
     assert parser.pull() == ["ping"]
+
+
+def test_parser_ignores_empty_push():
+    parser = Parser()
+    parser.push(b"")
+    assert parser.pull() is None
+
+
+def test_parser_discards_empty_name_and_invalid_params():
+    parser = Parser()
+    parser.push(b"\tvalue\r\n")
+    parser.push(b"cmd\tbad\x00\r\n")
+    assert parser.pull() is None
+
+
+def test_parser_discards_empty_line():
+    parser = Parser()
+    parser.push(b"\r\n")
+    assert parser.pull() is None
+
+
+def test_parser_trims_overflowed_buffer_then_recovers():
+    parser = Parser()
+    parser.push(b"a" * (MAX_LINE_LENGTH + 1))
+    parser.push(b"b" * 10)
+    parser.push(b"\r\nok\r\n")
+    assert parser.pull() == ["ok"]
 
 
 def test_parser_fuzz_inputs():
