@@ -19,6 +19,7 @@ def test_token_and_pattern_validation():
     assert is_valid_pattern("foo-*-bar")
     assert is_valid_pattern("foo-{a,b}-bar")
     assert not is_valid_pattern("foo--bar")
+    assert not is_valid_pattern("foo-!!-bar")
 
 
 def test_expand_list_and_range():
@@ -46,6 +47,20 @@ def test_expand_rejects_wildcards():
         list(expand("foo-*"))
 
 
+def test_expand_rejects_invalid_literals():
+    with pytest.raises(ValueError, match="invalid pattern literal"):
+        list(expand("foo-!!"))
+
+    with pytest.raises(ValueError, match="invalid pattern literal"):
+        list(expand("foo-$bad-part"))
+
+    with pytest.raises(ValueError, match="empty part"):
+        list(expand("foo--bar"))
+
+    with pytest.raises(ValueError, match="empty pattern"):
+        list(expand(""))
+
+
 def test_select_matches_wildcards_and_groups():
     scope = ["foo", "foo-1", "foo-2", "bar-1", "$global"]
     items = [{"id": value} for value in scope]
@@ -68,10 +83,79 @@ def test_select_match_all_and_single_part():
     ]
 
 
+def test_select_skips_seen_tokens_and_mismatch():
+    items = [{"id": "alpha"}, {"id": "alpha"}, {"id": ""}]
+    result = select("alpha", items, key=lambda item: item["id"])
+    assert [item["id"] for item in result] == ["alpha"]
+    assert list(select("beta", items, key=lambda item: item["id"])) == []
+
+
 def test_upper_expansion_limit():
     assert get_upper_expansion_limit("foo-{a,b}", 10) == 2
     assert get_upper_expansion_limit("foo-*", 10) == 10
     assert get_upper_expansion_limit("{a,b}-{0..2}-*", 5) == 2 * 3 * 5
+
+
+@pytest.mark.parametrize(
+    ("pattern", "message"),
+    [
+        ("{a{b}}", "nested group"),
+        ("a-}", "unexpected closing brace"),
+        ("a-{b", "unterminated group"),
+        ("-a", "empty part"),
+        ("a-", "empty part"),
+    ],
+)
+def test_expand_rejects_invalid_patterns(pattern, message):
+    with pytest.raises(ValueError, match=message):
+        list(expand(pattern))
+
+
+def test_group_validation_and_expansion_errors():
+    assert not is_valid_pattern("foo-{$bad}-bar")
+    assert not is_valid_pattern("foo-{,a}-bar")
+    assert not is_valid_pattern("foo-{1..a}-bar")
+    assert is_valid_pattern("foo-{1..2}-bar")
+    assert is_valid_pattern("$global-{a,b}")
+    assert not is_valid_pattern("foo-{$global}")
+    assert is_valid_pattern("{$global,foo}-bar")
+
+    with pytest.raises(ValueError, match="empty group item"):
+        list(expand("{a,}"))
+
+    with pytest.raises(ValueError, match="invalid group item"):
+        list(expand("{a,!!}"))
+
+
+def test_expand_range_validation_and_padding():
+    assert list(expand("{1..3}")) == ["1", "2", "3"]
+    assert list(expand("{01..03}")) == ["01", "02", "03"]
+
+    with pytest.raises(ValueError, match="invalid range"):
+        list(expand("{a..3}"))
+
+    with pytest.raises(ValueError, match="invalid range order"):
+        list(expand("{3..1}"))
+
+
+def test_group_size_validation():
+    assert get_upper_expansion_limit("{1..3}", 5) == 3
+    assert get_upper_expansion_limit("{a,b}", 5) == 2
+
+    with pytest.raises(ValueError, match="invalid range"):
+        get_upper_expansion_limit("{a..3}", 1)
+
+    with pytest.raises(ValueError, match="invalid range order"):
+        get_upper_expansion_limit("{3..1}", 1)
+
+    with pytest.raises(ValueError, match="empty group item"):
+        get_upper_expansion_limit("{a,}", 1)
+
+    with pytest.raises(ValueError, match="invalid group item"):
+        get_upper_expansion_limit("{a,!!}", 1)
+
+    with pytest.raises(ValueError, match="invalid group item"):
+        get_upper_expansion_limit("foo-{$global}", 1)
 
 
 def test_parser_fuzz_inputs_from_globbing():

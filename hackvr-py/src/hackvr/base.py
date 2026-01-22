@@ -176,8 +176,6 @@ class ProtocolBase(ABC):
 
     def _parse_list(self, annotation: object, values: list[str]) -> list[object]:
         inner = _list_inner(annotation)
-        if inner is None:
-            raise ValueError("unsupported list annotation")
         origin = get_origin(inner)
         if origin is tuple:
             typeset = get_args(inner)
@@ -287,11 +285,10 @@ def _is_list_annotation(annotation: object) -> bool:
 
 
 def _list_inner(annotation: object) -> object | None:
-    if get_origin(annotation) is not list:
-        return None
+    origin = get_origin(annotation)
+    assert origin is list, "list annotation required"
     args = get_args(annotation)
-    if len(args) != 1:
-        return None
+    assert len(args) == 1, "list annotation must specify a single type"
     return args[0]
 
 
