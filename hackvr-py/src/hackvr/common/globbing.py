@@ -177,8 +177,7 @@ def _is_group(part: str) -> bool:
 
 
 def _is_valid_literal(part: str, allow_reserved: bool) -> bool:
-    if part in {"*", "?"}:
-        return True
+    assert part not in {"*", "?"}, "wildcards handled before literal validation"
     if allow_reserved and part.startswith("$"):
         return bool(_RESERVED_RE.fullmatch(part))
     return bool(_TOKEN_RE.fullmatch(part))
@@ -202,8 +201,7 @@ def _is_valid_part(part: str, allow_reserved: bool) -> bool:
 
 def _is_valid_range(body: str) -> bool:
     start, sep, end = body.partition("..")
-    if sep == "":
-        return False
+    assert sep != "", "range checks are only valid for values containing '..'"
     if not start.isdigit() or not end.isdigit():
         return False
     return True

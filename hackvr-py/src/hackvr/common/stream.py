@@ -46,13 +46,10 @@ class Parser:
 
             terminator = self._buffer.find(b"\r\n")
             if terminator == -1:
-                if len(self._buffer) > MAX_LINE_LENGTH:
-                    self._overflowed = True
+                assert len(self._buffer) <= MAX_LINE_LENGTH
                 return
 
-            if terminator + 2 > MAX_LINE_LENGTH:
-                del self._buffer[: terminator + 2]
-                continue
+            assert terminator + 2 <= MAX_LINE_LENGTH
 
             line_bytes = bytes(self._buffer[:terminator])
             del self._buffer[: terminator + 2]
