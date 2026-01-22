@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import base64
-from typing import Optional
 
-from hackvr.base import ProtocolBase, command
+import pytest
+from typing import Optional, Tuple, cast
+
+from hackvr.base import ProtocolBase, RemoteBase, command
 from hackvr.common import types
 
 
@@ -61,6 +63,62 @@ class Server(BaseProtocol):
 
     def optional_values(self, *args: object) -> None:
         self.calls.append(("optional-values", args))
+
+
+class AbstractListProtocol(ProtocolBase):
+    @command("items")
+    def items(self, values: list[int]) -> None:
+        raise NotImplementedError
+
+    @command("tuple-items")
+    def tuple_items(self, values: list[tuple[types.Vec3, types.Vec3]]) -> None:
+        raise NotImplementedError
+
+    @command("empty-tuple-list")
+    def empty_tuple_list(self, values: list[Tuple]) -> None:
+        raise NotImplementedError
+
+    @command("list-not-last")
+    def list_not_last(self, values: list[int], extra: int) -> None:
+        raise NotImplementedError
+
+    @command("unsupported-annotation")
+    def unsupported_annotation(self, payload: dict) -> None:
+        raise NotImplementedError
+
+
+class ListProtocol(AbstractListProtocol):
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[object, ...]]] = []
+        self.errors: list[tuple[str, str, list[str]]] = []
+
+    def handle_error(self, cmd: str, message: str, args: list[str]) -> None:
+        self.errors.append((cmd, message, args))
+
+    def items(self, values: list[int]) -> None:
+        self.calls.append(("items", (values,)))
+
+    def tuple_items(self, values: list[tuple[types.Vec3, types.Vec3]]) -> None:
+        self.calls.append(("tuple-items", (values,)))
+
+    def empty_tuple_list(self, values: list[Tuple]) -> None:
+        self.calls.append(("empty-tuple-list", (values,)))
+
+    def list_not_last(self, values: list[int], extra: int) -> None:
+        self.calls.append(("list-not-last", (values, extra)))
+
+    def unsupported_annotation(self, payload: dict) -> None:
+        self.calls.append(("unsupported-annotation", (payload,)))
+
+
+class ErrorProtocol(ProtocolBase):
+    def handle_error(self, cmd: str, message: str, args: list[str]) -> None:
+        super().handle_error(cmd, message, args)
+
+
+class ErrorRemote(RemoteBase):
+    def send_packet(self, data: bytes) -> None:
+        super().send_packet(data)
 
 
 def test_execute_command_parses_all_types():
@@ -140,3 +198,76 @@ def test_optional_zstring_is_allowed():
 
         def handle_error(self, cmd: str, message: str, args: list[str]) -> None:
             raise NotImplementedError
+
+
+def test_parse_list_and_tuple_list():
+    server = ListProtocol()
+    server.execute_command("items", ["1", "2", "3"])
+    assert server.errors == []
+    assert server.calls[0][1] == ([1, 2, 3],)
+
+    server.execute_command(
+        "tuple-items",
+        ["(0 0 0)", "(1 1 1)", "(2 2 2)", "(3 3 3)"],
+    )
+    assert server.errors == []
+    _, parsed = server.calls[1]
+    tuples = cast(list[tuple[types.Vec3, types.Vec3]], parsed[0])
+    assert tuples[0] == (types.Vec3(0.0, 0.0, 0.0), types.Vec3(1.0, 1.0, 1.0))
+    assert tuples[1] == (types.Vec3(2.0, 2.0, 2.0), types.Vec3(3.0, 3.0, 3.0))
+
+    server.execute_command("empty-tuple-list", ["1", "2"])
+    assert server.calls[2][1] == ([],)
+
+
+def test_list_parsing_errors():
+    server = ListProtocol()
+    server.execute_command("tuple-items", ["(0 0 0)"])
+    assert "list tuple payload does not align" in server.errors[0][1]
+
+    server.execute_command("list-not-last", ["1", "2"])
+    assert "list parameters must be last" in server.errors[1][1]
+
+    server.execute_command("unsupported-annotation", ["value"])
+    assert "unsupported type annotation" in server.errors[2][1]
+
+
+def test_command_signature_validation():
+    with pytest.raises(TypeError):
+        class BadReturn(ProtocolBase):
+            @command("bad-return")
+            def bad_return(self) -> int:
+                return 1
+
+            def handle_error(self, cmd: str, message: str, args: list[str]) -> None:
+                raise NotImplementedError
+
+    with pytest.raises(TypeError):
+        class NoSelf(ProtocolBase):
+            @command("no-self")
+            def no_self(value: str) -> None:
+                raise NotImplementedError
+
+            def handle_error(self, cmd: str, message: str, args: list[str]) -> None:
+                raise NotImplementedError
+
+    with pytest.raises(TypeError):
+        class OptionalList(ProtocolBase):
+            @command("optional-list")
+            def optional_list(self, items: list[int] | None) -> None:
+                raise NotImplementedError
+
+            def handle_error(self, cmd: str, message: str, args: list[str]) -> None:
+                raise NotImplementedError
+
+
+def test_protocol_base_handle_error_is_abstract():
+    protocol = ErrorProtocol()
+    with pytest.raises(NotImplementedError):
+        protocol.handle_error("cmd", "message", [])
+
+
+def test_remote_base_send_packet_is_abstract():
+    remote = ErrorRemote()
+    with pytest.raises(NotImplementedError):
+        remote.send_packet(b"payload")
