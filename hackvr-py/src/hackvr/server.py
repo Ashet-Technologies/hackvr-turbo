@@ -512,10 +512,7 @@ def _default_port(protocol: str) -> int:
 def _resolve_addresses(hostname: str, port: int) -> list[str]:
     if hostname == "*":
         return ["0.0.0.0", "::"]
-    addresses: set[str] = {
-        str(entry[4][0])
-        for entry in socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
-    }
+    addresses: set[str] = {str(entry[4][0]) for entry in socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)}
     if not addresses:
         raise ValueError(f"No addresses resolved for host {hostname}")
     return sorted(addresses)

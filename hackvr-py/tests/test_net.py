@@ -386,12 +386,7 @@ def test_receive_line_closed_connection():
 
 def test_http_header_trailing_spaces_are_accepted():
     request = (
-        "GET /world HTTP/1.1\r\n"
-        "Host: example.com\r\n"
-        "Connection: upgrade  \r\n"
-        "Upgrade: hackvr  \r\n"
-        "HackVr-Version: v1\r\n"
-        "\r\n"
+        "GET /world HTTP/1.1\r\nHost: example.com\r\nConnection: upgrade  \r\nUpgrade: hackvr  \r\nHackVr-Version: v1\r\n\r\n"
     ).encode("iso-8859-1")
     stream = FakeNetStream(request)
     parsed = net._receive_http_request(stream, net.Deadline.from_now(s=0.1))
@@ -404,33 +399,17 @@ def test_receive_http_request_errors():
     with pytest.raises(net.HandshakeError):
         net._receive_http_request(stream, net.Deadline.from_now(s=0.1))
 
-    request = (
-        "POST /world HTTP/1.1\r\n"
-        "Host: example.com\r\n"
-        "Connection: upgrade\r\n"
-        "Upgrade: hackvr\r\n"
-        "\r\n"
-    ).encode("iso-8859-1")
+    request = ("POST /world HTTP/1.1\r\nHost: example.com\r\nConnection: upgrade\r\nUpgrade: hackvr\r\n\r\n").encode("iso-8859-1")
     stream = FakeNetStream(request)
     with pytest.raises(net.HandshakeError):
         net._receive_http_request(stream, net.Deadline.from_now(s=0.1))
 
-    request = (
-        "GET /world HTTP/1.1\r\n"
-        "Host: example.com\r\n"
-        "Upgrade: hackvr\r\n"
-        "\r\n"
-    ).encode("iso-8859-1")
+    request = ("GET /world HTTP/1.1\r\nHost: example.com\r\nUpgrade: hackvr\r\n\r\n").encode("iso-8859-1")
     stream = FakeNetStream(request)
     with pytest.raises(net.HandshakeError):
         net._receive_http_request(stream, net.Deadline.from_now(s=0.1))
 
-    request = (
-        "GET /world HTTP/1.1\r\n"
-        "Connection: upgrade\r\n"
-        "Upgrade: hackvr\r\n"
-        "\r\n"
-    ).encode("iso-8859-1")
+    request = ("GET /world HTTP/1.1\r\nConnection: upgrade\r\nUpgrade: hackvr\r\n\r\n").encode("iso-8859-1")
     stream = FakeNetStream(request)
     with pytest.raises(net.HandshakeError):
         net._receive_http_request(stream, net.Deadline.from_now(s=0.1))
@@ -439,12 +418,7 @@ def test_receive_http_request_errors():
 def test_receive_http_request_with_session_token():
     token, encoded = _make_session_token()
     request = (
-        "GET /world HTTP/1.1\r\n"
-        "Host: example.com\r\n"
-        "Connection: upgrade\r\n"
-        "Upgrade: hackvr\r\n"
-        f"HackVr-Session: {encoded}\r\n"
-        "\r\n"
+        f"GET /world HTTP/1.1\r\nHost: example.com\r\nConnection: upgrade\r\nUpgrade: hackvr\r\nHackVr-Session: {encoded}\r\n\r\n"
     ).encode("iso-8859-1")
     stream = FakeNetStream(request)
     parsed = net._receive_http_request(stream, net.Deadline.from_now(s=0.1))
@@ -453,13 +427,7 @@ def test_receive_http_request_with_session_token():
 
 def test_http_read_until_keeps_remainder():
     payload = (
-        "GET /world HTTP/1.1\r\n"
-        "Host: example.com\r\n"
-        "Connection: upgrade\r\n"
-        "Upgrade: hackvr\r\n"
-        "HackVr-Version: v1\r\n"
-        "\r\n"
-        "extra-bytes"
+        "GET /world HTTP/1.1\r\nHost: example.com\r\nConnection: upgrade\r\nUpgrade: hackvr\r\nHackVr-Version: v1\r\n\r\nextra-bytes"
     ).encode("iso-8859-1")
     stream = FakeNetStream(payload)
     net._receive_http_request(stream, net.Deadline.from_now(s=0.1))
@@ -478,11 +446,7 @@ def test_http_upgrade_errors():
     with pytest.raises(net.HandshakeError):
         net._receive_http_upgrade(stream, net.Deadline.from_now(s=0.1))
 
-    response = (
-        "HTTP/1.1 101 Switching Protocols\r\n"
-        "Upgrade: hackvr\r\n"
-        "\r\n"
-    ).encode("iso-8859-1")
+    response = ("HTTP/1.1 101 Switching Protocols\r\nUpgrade: hackvr\r\n\r\n").encode("iso-8859-1")
     stream = FakeNetStream(response)
     with pytest.raises(net.HandshakeError):
         net._receive_http_upgrade(stream, net.Deadline.from_now(s=0.1))
@@ -525,12 +489,7 @@ def test_fragmented_reads_randomized_for_http_and_hello():
     rng = random.Random(1337)
     hello = encoding.encode("hackvr-hello", ["v1"])
     http_request = (
-        "GET /world HTTP/1.1\r\n"
-        "Host: example.com\r\n"
-        "Connection: upgrade\r\n"
-        "Upgrade: hackvr\r\n"
-        "HackVr-Version: v1\r\n"
-        "\r\n"
+        "GET /world HTTP/1.1\r\nHost: example.com\r\nConnection: upgrade\r\nUpgrade: hackvr\r\nHackVr-Version: v1\r\n\r\n"
     ).encode("iso-8859-1")
     combined = hello + http_request
     sizes = [rng.randint(1, 4) for _ in range(len(combined))]

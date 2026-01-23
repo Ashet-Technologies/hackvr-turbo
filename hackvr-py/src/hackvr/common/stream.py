@@ -82,10 +82,7 @@ def _is_valid_name(value: str) -> bool:
 
 
 def _is_valid_param(value: str) -> bool:
-    return all(
-        not (unicodedata.category(ch) == "Cc" and ch != "\n")
-        for ch in value
-    )
+    return all(not (unicodedata.category(ch) == "Cc" and ch != "\n") for ch in value)
 
 
 def _contains_control(value: str) -> bool:

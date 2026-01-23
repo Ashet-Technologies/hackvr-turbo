@@ -13,6 +13,7 @@ from cryptography.x509.oid import NameOID
 
 from hackvr import net
 
+
 def generate_self_signed_certificate(
     *,
     common_name: str,

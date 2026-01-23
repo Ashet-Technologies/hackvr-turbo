@@ -61,12 +61,7 @@ class Deadline:
         us: float = 0.0,
         ns: float = 0.0,
     ) -> Deadline:
-        total_ns = int(
-            (h * 3600.0 + m * 60.0 + s) * 1_000_000_000
-            + ms * 1_000_000
-            + us * 1_000
-            + ns
-        )
+        total_ns = int((h * 3600.0 + m * 60.0 + s) * 1_000_000_000 + ms * 1_000_000 + us * 1_000 + ns)
         if total_ns <= 0:
             raise ValueError("Deadline must be greater than zero")
         return cls(time.monotonic_ns() + total_ns)
