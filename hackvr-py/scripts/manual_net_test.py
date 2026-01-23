@@ -13,7 +13,9 @@ from hackvr import net
 def run_server(host: str, port: int) -> None:
     server = net.RawServer(host, port)
     print(f"Listening on {host}:{port} ...")
-    peer, token = server.accept()
+    result = server.accept()
+    assert result is not None
+    peer, token = result
     print("Accepted connection:", token)
     peer.send(b"ping\r\n")
     for _ in range(20):

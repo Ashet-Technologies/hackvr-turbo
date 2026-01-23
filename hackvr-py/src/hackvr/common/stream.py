@@ -29,14 +29,9 @@ class Parser:
 
     def _parse_buffer(self) -> None:
         while True:
-            if self._overflowed and len(self._buffer) > MAX_LINE_LENGTH:
-                del self._buffer[: len(self._buffer) - MAX_LINE_LENGTH]
-            if not self._overflowed and len(self._buffer) > MAX_LINE_LENGTH:
-                self._overflowed = True
-                del self._buffer[: len(self._buffer) - MAX_LINE_LENGTH]
-
-            assert len(self._buffer) <= MAX_LINE_LENGTH
             if self._overflowed:
+                if len(self._buffer) > MAX_LINE_LENGTH:
+                    del self._buffer[: len(self._buffer) - MAX_LINE_LENGTH]
                 terminator = self._buffer.find(b"\r\n")
                 if terminator == -1:
                     return
@@ -46,10 +41,15 @@ class Parser:
 
             terminator = self._buffer.find(b"\r\n")
             if terminator == -1:
+                if len(self._buffer) > MAX_LINE_LENGTH:
+                    self._overflowed = True
+                    del self._buffer[: len(self._buffer) - MAX_LINE_LENGTH]
                 assert len(self._buffer) <= MAX_LINE_LENGTH
                 return
 
-            assert terminator + 2 <= MAX_LINE_LENGTH
+            if terminator + 2 > MAX_LINE_LENGTH:
+                del self._buffer[: terminator + 2]
+                continue
 
             line_bytes = bytes(self._buffer[:terminator])
             del self._buffer[: terminator + 2]

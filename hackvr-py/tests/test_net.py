@@ -113,7 +113,7 @@ class FakeListener:
     def __init__(self, stream: FakeNetStream) -> None:
         self.stream = stream
 
-    def accept(self) -> tuple[net.NetStream, tuple[str, int]]:
+    def accept(self, deadline: net.Deadline) -> tuple[net.NetStream, tuple[str, int]] | None:  # noqa: ARG002
         return self.stream, ("127.0.0.1", 12345)
 
     def close(self) -> None:
@@ -273,7 +273,9 @@ def test_raw_server_accepts_client_hello_and_responds():
     listener = FakeListener(stream)
     server = net.RawServer("127.0.0.1", listener=listener)
 
-    peer, token_info = server.accept()
+    result = server.accept()
+    assert result is not None
+    peer, token_info = result
 
     assert isinstance(peer, net.Peer)
     assert token_info.source_url.geturl() == "hackvr://example.com/world"
@@ -282,6 +284,48 @@ def test_raw_server_accepts_client_hello_and_responds():
     assert token_info.is_secure is False
     expected = encoding.encode("hackvr-hello", ["v1"])
     assert bytes(stream.sent) == expected
+
+
+def test_server_accept_returns_none_when_no_connection():
+    server = net.RawServer("127.0.0.1", 0)
+    try:
+        assert server.accept(net.Deadline.INSTANT) is None
+    finally:
+        server.close()
+
+
+def test_tls_listener_accept_returns_none_when_no_connection():
+    certificate = keygen.generate_self_signed_certificate(common_name="localhost", valid_days=1)
+    listener = net.TlsListener("127.0.0.1", 0, certificate)
+    try:
+        assert listener.accept(net.Deadline.INSTANT) is None
+    finally:
+        listener.close()
+
+
+def test_tls_and_https_servers_accept_return_none_when_idle():
+    certificate = keygen.generate_self_signed_certificate(common_name="localhost", valid_days=1)
+    listener = net.TlsListener("127.0.0.1", 0, certificate)
+    port = listener._sock.getsockname()[1]
+    tls_server = net.TlsServer("127.0.0.1", port, listener=listener)
+    try:
+        assert tls_server.accept(net.Deadline.INSTANT) is None
+    finally:
+        tls_server.close()
+
+    https_listener = net.TlsListener("127.0.0.1", 0, certificate)
+    https_port = https_listener._sock.getsockname()[1]
+    https_server = net.HttpsServer("127.0.0.1", https_port, listener=https_listener)
+    try:
+        assert https_server.accept(net.Deadline.INSTANT) is None
+    finally:
+        https_server.close()
+
+    http_server = net.HttpServer("127.0.0.1", 0)
+    try:
+        assert http_server.accept(net.Deadline.INSTANT) is None
+    finally:
+        http_server.close()
 
 
 def test_http_server_close_without_listener():
@@ -566,7 +610,9 @@ def test_tls_certificate_generation_roundtrip_and_server(tmp_path):
     server_peer = {}
 
     def _accept() -> None:
-        peer, token = server.accept()
+        result = server.accept()
+        assert result is not None
+        peer, token = result
         server_peer["token"] = token
         peer.close()
 
@@ -642,7 +688,9 @@ def test_client_http_hackvr_connects():
     received: dict[str, net.ConnectionToken] = {}
 
     def _accept() -> None:
-        peer, token = server.accept()
+        result = server.accept()
+        assert result is not None
+        peer, token = result
         received["token"] = token
         peer.close()
 
@@ -676,6 +724,22 @@ def test_send_http_upgrade_headers():
     assert stream.sent.startswith(b"HTTP/1.1 101")
 
 
+def test_socket_family_helpers():
+    assert net._socket_family("127.0.0.1") == socket.AF_INET
+    assert net._socket_family("::1") == socket.AF_INET6
+    assert net._socket_family("localhost") == socket.AF_INET
+
+
+def test_ipv6_listeners_bind_when_available():
+    if not socket.has_ipv6:
+        pytest.skip("IPv6 not available")
+    raw_listener = net.RawListener("::1", 0)
+    raw_listener.close()
+    certificate = keygen.generate_self_signed_certificate(common_name="localhost", valid_days=1)
+    tls_listener = net.TlsListener("::1", 0, certificate)
+    tls_listener.close()
+
+
 def test_client_https_hackvr_connects(tmp_path):
     certificate = keygen.generate_self_signed_certificate(common_name="localhost", valid_days=1)
     listener = net.TlsListener("127.0.0.1", 0, certificate)
@@ -687,7 +751,9 @@ def test_client_https_hackvr_connects(tmp_path):
     received: dict[str, net.ConnectionToken] = {}
 
     def _accept() -> None:
-        peer, token = server.accept()
+        result = server.accept()
+        assert result is not None
+        peer, token = result
         received["token"] = token
         peer.close()
 

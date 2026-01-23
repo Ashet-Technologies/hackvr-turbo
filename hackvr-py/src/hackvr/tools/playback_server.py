@@ -192,14 +192,18 @@ class PlaybackServer:
         self._output.write(f"Listening on {self._scheme}://{self._host}:{self._port}\n")
         self._output.flush()
         if self._oneshot:
-            stream, token = self._server._accept_stream()
+            result = self._server._accept_stream(net.Deadline.NEVER)
+            assert result is not None
+            stream, token = result
             handler = _PlaybackConnection(stream, token, self._commands, self._output, name="client-1")
             handler.run()
             self._server.close()
             return
         index = 0
         while True:
-            stream, token = self._server._accept_stream()
+            result = self._server._accept_stream(net.Deadline.NEVER)
+            assert result is not None
+            stream, token = result
             index += 1
             name = f"client-{index}"
             handler = _PlaybackConnection(stream, token, self._commands, self._output, name=name)

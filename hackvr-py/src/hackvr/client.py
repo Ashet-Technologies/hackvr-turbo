@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
+from OpenSSL import SSL
+
+from . import net
 from .base import (
+    ConnectionToken,
     ProtocolBase,
     RemoteBase,
     _serialize_bytes,
@@ -13,6 +18,7 @@ from .base import (
     _serialize_vec3,
     command,
 )
+from .common import stream
 
 if TYPE_CHECKING:
     from .common import types
@@ -263,3 +269,77 @@ class RemoteServer(RemoteBase):
 
     def raycast_cancel(self) -> None:
         self.send_cmd("raycast-cancel")
+
+
+class _NetworkRemoteServer(RemoteServer):
+    """Remote server adapter that sends packets through a net.Client."""
+
+    def __init__(self, client: net.Client) -> None:
+        self._client = client
+
+    def send_packet(self, data: bytes) -> None:
+        self._client.send(data)
+
+
+class Client(AbstractClient):
+    """Networked HackVR client with polling-driven command dispatch."""
+
+    def __init__(self, net_client: net.Client | None = None) -> None:
+        super().__init__()
+        self._net_client = net_client or net.Client()
+        self._parser = stream.Parser()
+        self._server = _NetworkRemoteServer(self._net_client)
+        self._connected = False
+
+    def connect(
+        self,
+        url: str,
+        session_token: types.SessionToken | None = None,
+    ) -> ConnectionToken:
+        token = self._net_client.connect(url, session_token=session_token)
+        self._parser = stream.Parser()
+        self._connected = True
+        return token
+
+    @property
+    def is_connected(self) -> bool:
+        return self._connected and self._net_client._stream is not None
+
+    def poll(self) -> None:
+        if not self.is_connected:
+            return
+        stream_obj = self._net_client._stream
+        assert stream_obj is not None
+        try:
+            data = stream_obj.recv(4096, deadline=net.Deadline.INSTANT)
+        except (OSError, SSL.Error, ValueError):
+            self._disconnect()
+            return
+        if data is None:
+            return
+        if data == b"":
+            self._disconnect()
+            return
+        self._parser.push(data)
+        while True:
+            parts = self._parser.pull()
+            if parts is None:
+                break
+            cmd, *args = parts
+            self.execute_command(cmd, args)
+
+    @property
+    def server(self) -> RemoteServer:
+        return self._server
+
+    def handle_error(self, cmd: str, message: str, args: list[str]) -> None:
+        details = " ".join(args)
+        suffix = f" {details}" if details else ""
+        logging.getLogger(__name__).warning("Invalid command received: %s%s (%s)", cmd, suffix, message)
+
+    def _disconnect(self) -> None:
+        self._net_client.close()
+        self._connected = False
+
+
+Client.__abstractmethods__ = frozenset()
