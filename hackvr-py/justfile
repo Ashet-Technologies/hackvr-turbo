@@ -12,6 +12,9 @@ lint-codestyle:
 lint-types:
     ty check
 
+fuzz:
+    HACKVR_FUZZ_MAX_TIME=0 PYTHONPATH=src python tests/fuzzing/fuzz_common_stream.py
+
 install:
     python -m pip install -r requirements.txt
 
