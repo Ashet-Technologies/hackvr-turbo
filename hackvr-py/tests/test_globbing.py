@@ -73,9 +73,7 @@ def test_select_matches_wildcards_and_groups():
 def test_select_match_all_and_single_part():
     scope = ["one", "two", "two-part"]
     items = [{"id": value} for value in scope]
-    selected_all = [
-        item["id"] for item in select("*", items, key=lambda item: item["id"])
-    ]
+    selected_all = [item["id"] for item in select("*", items, key=lambda item: item["id"])]
     assert selected_all == scope
     assert [item["id"] for item in select("?", items, key=lambda item: item["id"])] == [
         "one",

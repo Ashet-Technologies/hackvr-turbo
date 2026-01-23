@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import ipaddress
 import select
 import socket
 import time
@@ -34,6 +35,7 @@ _CLIENT_HELLO_MAX_PARTS = 4
 _HTTP_REQUEST_MIN_PARTS = 3
 _HTTP_RESPONSE_MIN_PARTS = 2
 _DEADLINE_NEVER_NS = 2**63 - 1
+_IPV6_VERSION = 6
 
 
 class HandshakeError(RuntimeError):
@@ -59,12 +61,7 @@ class Deadline:
         us: float = 0.0,
         ns: float = 0.0,
     ) -> Deadline:
-        total_ns = int(
-            (h * 3600.0 + m * 60.0 + s) * 1_000_000_000
-            + ms * 1_000_000
-            + us * 1_000
-            + ns
-        )
+        total_ns = int((h * 3600.0 + m * 60.0 + s) * 1_000_000_000 + ms * 1_000_000 + us * 1_000 + ns)
         if total_ns <= 0:
             raise ValueError("Deadline must be greater than zero")
         return cls(time.monotonic_ns() + total_ns)
@@ -255,8 +252,8 @@ class DefaultConnector:
 class Listener(Protocol):
     """Protocol for accepting network streams."""
 
-    def accept(self) -> tuple[NetStream, tuple[str, int]]:
-        """Accept an inbound connection."""
+    def accept(self, deadline: Deadline) -> tuple[NetStream, tuple[str, int]] | None:
+        """Accept an inbound connection when ready."""
 
     def close(self) -> None:
         """Close the listener."""
@@ -266,12 +263,18 @@ class RawListener:
     """TCP listener for plain connections."""
 
     def __init__(self, host: str, port: int) -> None:
-        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        family = _socket_family(host)
+        self._sock = socket.socket(family, socket.SOCK_STREAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._sock.bind((host, port))
+        if family == socket.AF_INET6:
+            self._sock.bind((host, port, 0, 0))
+        else:
+            self._sock.bind((host, port))
         self._sock.listen()
 
-    def accept(self) -> tuple[NetStream, tuple[str, int]]:
+    def accept(self, deadline: Deadline) -> tuple[NetStream, tuple[str, int]] | None:
+        if not _wait_for_read(self._sock, deadline):
+            return None
         conn, addr = self._sock.accept()
         return RawNetStream(conn), addr
 
@@ -299,13 +302,19 @@ class TlsListener:
     """TCP listener for TLS connections."""
 
     def __init__(self, host: str, port: int, certificate: TlsServerCertificate) -> None:
-        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        family = _socket_family(host)
+        self._sock = socket.socket(family, socket.SOCK_STREAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._sock.bind((host, port))
+        if family == socket.AF_INET6:
+            self._sock.bind((host, port, 0, 0))
+        else:
+            self._sock.bind((host, port))
         self._sock.listen()
         self._context = _build_tls_context(certificate)
 
-    def accept(self) -> tuple[NetStream, tuple[str, int]]:
+    def accept(self, deadline: Deadline) -> tuple[NetStream, tuple[str, int]] | None:
+        if not _wait_for_read(self._sock, deadline):
+            return None
         conn, addr = self._sock.accept()
         tls_conn = SSL.Connection(self._context, conn)
         tls_conn.set_accept_state()
@@ -458,8 +467,11 @@ class Server(ABC):
         self._hello_timeout = hello_timeout
         self._listener = listener
 
-    def accept(self) -> tuple[Peer, ConnectionToken]:
-        stream, token = self._accept_stream()
+    def accept(self, deadline: Deadline = Deadline.NEVER) -> tuple[Peer, ConnectionToken] | None:
+        result = self._accept_stream(deadline)
+        if result is None:
+            return None
+        stream, token = result
         return Peer(stream), token
 
     def close(self) -> None:
@@ -467,7 +479,7 @@ class Server(ABC):
             self._listener.close()
 
     @abstractmethod
-    def _accept_stream(self) -> tuple[NetStream, ConnectionToken]:
+    def _accept_stream(self, deadline: Deadline) -> tuple[NetStream, ConnectionToken] | None:
         """Accept a connection and perform handshake."""
 
 
@@ -485,9 +497,12 @@ class RawServer(Server):
         if self._listener is None:
             self._listener = RawListener(host, port)
 
-    def _accept_stream(self) -> tuple[NetStream, ConnectionToken]:
+    def _accept_stream(self, deadline: Deadline) -> tuple[NetStream, ConnectionToken] | None:
         assert self._listener is not None
-        stream, _addr = self._listener.accept()
+        result = self._listener.accept(deadline)
+        if result is None:
+            return None
+        stream, _addr = result
         _send_hello(stream)
         hello = _receive_client_hello(stream, Deadline.from_now(s=self._hello_timeout))
         return stream, ConnectionToken(
@@ -512,9 +527,12 @@ class TlsServer(Server):
         if self._listener is None:
             raise ValueError("TlsServer requires a TLS listener")
 
-    def _accept_stream(self) -> tuple[NetStream, ConnectionToken]:
+    def _accept_stream(self, deadline: Deadline) -> tuple[NetStream, ConnectionToken] | None:
         assert self._listener is not None
-        stream, _addr = self._listener.accept()
+        result = self._listener.accept(deadline)
+        if result is None:
+            return None
+        stream, _addr = result
         _send_hello(stream)
         hello = _receive_client_hello(stream, Deadline.from_now(s=self._hello_timeout))
         return stream, ConnectionToken(
@@ -538,9 +556,12 @@ class HttpServer(Server):
         if self._listener is None:
             self._listener = RawListener(host, port)
 
-    def _accept_stream(self) -> tuple[NetStream, ConnectionToken]:
+    def _accept_stream(self, deadline: Deadline) -> tuple[NetStream, ConnectionToken] | None:
         assert self._listener is not None
-        stream, _addr = self._listener.accept()
+        result = self._listener.accept(deadline)
+        if result is None:
+            return None
+        stream, _addr = result
         request = _receive_http_request(stream, Deadline.from_now(s=self._hello_timeout))
         _send_http_upgrade_response(stream)
         source_url = urlsplit(f"http+hackvr://{request.host}{request.path}")
@@ -565,9 +586,12 @@ class HttpsServer(Server):
         if self._listener is None:
             raise ValueError("HttpsServer requires a TLS listener")
 
-    def _accept_stream(self) -> tuple[NetStream, ConnectionToken]:
+    def _accept_stream(self, deadline: Deadline) -> tuple[NetStream, ConnectionToken] | None:
         assert self._listener is not None
-        stream, _addr = self._listener.accept()
+        result = self._listener.accept(deadline)
+        if result is None:
+            return None
+        stream, _addr = result
         request = _receive_http_request(stream, Deadline.from_now(s=self._hello_timeout))
         _send_http_upgrade_response(stream)
         source_url = urlsplit(f"https+hackvr://{request.host}{request.path}")
@@ -814,6 +838,14 @@ def _wait_for_read(sock: socket.socket | SSL.Connection, deadline: Deadline) -> 
         return True
     ready, _w, _x = select.select([sock], [], [], deadline.get_remaining_s())
     return bool(ready)
+
+
+def _socket_family(host: str) -> socket.AddressFamily:
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return socket.AF_INET
+    return socket.AF_INET6 if ip.version == _IPV6_VERSION else socket.AF_INET
 
 
 def _default_tls_context() -> SSL.Context:

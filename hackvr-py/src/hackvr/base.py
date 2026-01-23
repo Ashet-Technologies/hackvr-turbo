@@ -187,10 +187,7 @@ class ProtocolBase(ABC):
             for offset in range(0, len(values), len(typeset)):
                 chunk = values[offset : offset + len(typeset)]
                 output.append(
-                    tuple(
-                        self._parse_value(type_hint, chunk_value, False)
-                        for type_hint, chunk_value in zip(typeset, chunk, strict=False)
-                    )
+                    tuple(self._parse_value(type_hint, chunk_value, False) for type_hint, chunk_value in zip(typeset, chunk, strict=False))
                 )
             return output
         return [self._parse_value(inner, item, False) for item in values]

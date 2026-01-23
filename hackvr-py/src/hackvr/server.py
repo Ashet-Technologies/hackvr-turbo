@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+import logging
+import socket
+import time
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Literal, overload, cast
 
+from OpenSSL import SSL
+
+from . import net
 from .base import (
     ProtocolBase,
     RemoteBase,
@@ -19,6 +26,7 @@ from .base import (
     _serialize_vec3,
     command,
 )
+from .common import stream
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -328,3 +336,207 @@ class RemoteClient(RemoteBase):
 
     def set_background_color(self, color: types.Color) -> None:
         self.send_cmd("set-background-color", str(color))
+
+
+class _NetworkRemoteClient(RemoteClient):
+    """Remote client adapter that sends packets through a net.Peer."""
+
+    def __init__(self, peer: net.Peer) -> None:
+        self._peer = peer
+
+    def send_packet(self, data: bytes) -> None:
+        self._peer.send(data)
+
+
+class Connection(AbstractServer):
+    """Networked HackVR server connection with polling-driven dispatch."""
+
+    def __init__(self, peer: net.Peer, connection_token: net.ConnectionToken) -> None:
+        super().__init__()
+        self._peer = peer
+        self._parser = stream.Parser()
+        self._client = _NetworkRemoteClient(peer)
+        self.connection_token = connection_token
+        self._connected = True
+
+    @property
+    def is_connected(self) -> bool:
+        return self._connected
+
+    def poll(self) -> None:
+        if not self._connected:
+            return
+        stream_obj = self._peer._stream
+        assert stream_obj is not None
+        try:
+            data = stream_obj.recv(4096, deadline=net.Deadline.INSTANT)
+        except (OSError, SSL.Error, ValueError):
+            self._disconnect()
+            return
+        if data is None:
+            return
+        if data == b"":
+            self._disconnect()
+            return
+        self._parser.push(data)
+        while True:
+            parts = self._parser.pull()
+            if parts is None:
+                break
+            cmd, *args = parts
+            self.execute_command(cmd, args)
+
+    @property
+    def client(self) -> RemoteClient:
+        return self._client
+
+    def handle_error(self, cmd: str, message: str, args: list[str]) -> None:
+        details = " ".join(args)
+        suffix = f" {details}" if details else ""
+        logging.getLogger(__name__).warning("Invalid command received: %s%s (%s)", cmd, suffix, message)
+
+    def _disconnect(self) -> None:
+        self._peer.close()
+        self._connected = False
+
+
+Connection.__abstractmethods__ = frozenset()
+
+
+class Server(ABC):
+    """Server wrapper for accepting and polling HackVR connections."""
+
+    def __init__(self) -> None:
+        self._bindings: list[net.Server] = []
+        self._connections: list[Connection] = []
+        self._stop_requested = False
+
+    @overload
+    def add_binding(
+        self,
+        protocol: Literal["hackvr", "http+hackvr"],
+        hostname: str,
+        port: int | None = None,
+    ) -> None: ...
+
+    @overload
+    def add_binding(
+        self,
+        protocol: Literal["hackvrs", "https+hackvr"],
+        hostname: str,
+        port: int | None = None,
+        *,
+        certificate: net.TlsServerCertificate,
+    ) -> None: ...
+
+    def add_binding(
+        self,
+        protocol: Literal["hackvr", "hackvrs", "http+hackvr", "https+hackvr"],
+        hostname: str,
+        port: int | None = None,
+        *,
+        certificate: net.TlsServerCertificate | None = None,
+    ) -> None:
+        default_port = _default_port(protocol)
+        resolved_port = default_port if port is None else port
+        if protocol in {"hackvrs", "https+hackvr"} and certificate is None:
+            raise ValueError("TLS bindings require a certificate")
+        if protocol in {"hackvr", "http+hackvr"} and certificate is not None:
+            raise ValueError("Non-TLS bindings do not use certificates")
+
+        addresses = _resolve_addresses(hostname, resolved_port)
+        bindings: list[net.Server] = []
+        try:
+            for address in addresses:
+                bindings.append(  # noqa: PERF401
+                    _create_net_server(
+                        protocol,
+                        address,
+                        resolved_port,
+                        certificate=certificate,
+                    )
+                )
+        except Exception:
+            for binding in bindings:
+                binding.close()
+            raise
+        self._bindings.extend(bindings)
+
+    @abstractmethod
+    def accept_client(self, peer: net.Peer, connection_token: net.ConnectionToken) -> Connection:
+        """Create a Connection instance for an accepted client."""
+
+    def handle_disconnect(self, _connection: Connection) -> None:
+        """Handle connection disconnection."""
+        logging.getLogger(__name__).debug("Connection disconnected: %s", _connection)
+
+    def stop(self) -> None:
+        """Stop the server loop."""
+        self._stop_requested = True
+
+    def serve_forever(self) -> None:
+        while not self._stop_requested:
+            self._accept_new_connections()
+            self._poll_connections()
+            time.sleep(0.01)
+
+    def _accept_new_connections(self) -> None:
+        for binding in list(self._bindings):
+            result = binding.accept(net.Deadline.INSTANT)
+            if result is None:
+                continue
+            peer, token = result
+            connection = self.accept_client(peer, token)
+            self._connections.append(connection)
+
+    def _poll_connections(self) -> None:
+        for connection in list(self._connections):
+            connection.poll()
+            if not connection.is_connected:
+                self._connections.remove(connection)
+                self.handle_disconnect(connection)
+
+
+def _default_port(protocol: str) -> int:
+    if protocol == "hackvr":
+        return net.HACKVR_PORT
+    if protocol == "hackvrs":
+        return net.HACKVRS_PORT
+    if protocol == "http+hackvr":
+        return 80
+    if protocol == "https+hackvr":
+        return 443
+    raise ValueError(f"Unsupported protocol: {protocol}")
+
+
+def _resolve_addresses(hostname: str, port: int) -> list[str]:
+    if hostname == "*":
+        return ["0.0.0.0", "::"]
+    addresses: set[str] = {str(entry[4][0]) for entry in socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)}
+    if not addresses:
+        raise ValueError(f"No addresses resolved for host {hostname}")
+    return sorted(addresses)
+
+
+def _create_net_server(
+    protocol: str,
+    hostname: str,
+    port: int,
+    *,
+    certificate: net.TlsServerCertificate | None = None,
+) -> net.Server:
+    if protocol == "hackvr":
+        return net.RawServer(hostname, port)
+    if protocol == "hackvrs":
+        if certificate is None:
+            raise ValueError("TLS bindings require a certificate")
+        listener = net.TlsListener(hostname, port, certificate)
+        return net.TlsServer(hostname, port, listener=listener)
+    if protocol == "http+hackvr":
+        return net.HttpServer(hostname, port)
+    if protocol == "https+hackvr":
+        if certificate is None:
+            raise ValueError("TLS bindings require a certificate")
+        listener = net.TlsListener(hostname, port, certificate)
+        return net.HttpsServer(hostname, port, listener=listener)
+    raise ValueError(f"Unsupported protocol: {protocol}")

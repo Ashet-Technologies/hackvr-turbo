@@ -39,7 +39,7 @@ class FakeServer:
         self.accept_calls = 0
         self.closed = False
 
-    def _accept_stream(self) -> tuple[net.NetStream, ConnectionToken]:
+    def _accept_stream(self, deadline: net.Deadline) -> tuple[net.NetStream, ConnectionToken] | None:  # noqa: ARG002
         self.accept_calls += 1
         return self._stream, self._token
 
@@ -367,10 +367,10 @@ def test_serve_forever_accepts_single_client() -> None:
     )
 
     class LoopServer(FakeServer):
-        def _accept_stream(self) -> tuple[net.NetStream, ConnectionToken]:
+        def _accept_stream(self, deadline: net.Deadline) -> tuple[net.NetStream, ConnectionToken] | None:  # noqa: ARG002
             if self.accept_calls >= 1:
                 raise StopIteration
-            return super()._accept_stream()
+            return super()._accept_stream(deadline)
 
     fake_server = LoopServer(stream, token)
     server = playback_server.PlaybackServer(

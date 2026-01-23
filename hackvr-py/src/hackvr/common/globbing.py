@@ -72,9 +72,7 @@ def select(pattern: str, scope: Iterable[_T], key: Callable[[_T], str]) -> Itera
         return list(scope)
 
     patterns = list(_expand_patterns(pattern))
-    parsed_patterns = [
-        _pattern_parts(expanded) for expanded in patterns
-    ]
+    parsed_patterns = [_pattern_parts(expanded) for expanded in patterns]
 
     result: list[_T] = []
     seen = set()
@@ -153,9 +151,7 @@ def _matches(pattern_parts: list[str], token_parts: list[str]) -> bool:
             match_index = ti
             pi += 1
             continue
-        if pi < len(pattern_parts) and (
-            pattern_parts[pi] == "?" or pattern_parts[pi] == token_parts[ti]
-        ):
+        if pi < len(pattern_parts) and (pattern_parts[pi] == "?" or pattern_parts[pi] == token_parts[ti]):
             pi += 1
             ti += 1
             continue
@@ -229,9 +225,7 @@ def _expand_range(body: str) -> list[str]:
     if start > end:
         raise ValueError("invalid range order")
     width = 0
-    if (
-        _has_leading_zero(start_str) or _has_leading_zero(end_str)
-    ) and max(len(start_str), len(end_str)) > 1:
+    if (_has_leading_zero(start_str) or _has_leading_zero(end_str)) and max(len(start_str), len(end_str)) > 1:
         width = max(len(start_str), len(end_str))
     if width:
         return [str(number).zfill(width) for number in range(start, end + 1)]

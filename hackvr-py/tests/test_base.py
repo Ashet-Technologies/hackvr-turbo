@@ -50,6 +50,7 @@ class BaseProtocol(ProtocolBase):
     ) -> None:
         raise NotImplementedError
 
+
 class Server(BaseProtocol):
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple[object, ...]]] = []
@@ -234,6 +235,7 @@ def test_list_parsing_errors():
 
 def test_command_signature_validation():
     with pytest.raises(TypeError):
+
         class BadReturn(ProtocolBase):
             @command("bad-return")
             def bad_return(self) -> int:
@@ -243,6 +245,7 @@ def test_command_signature_validation():
                 raise NotImplementedError
 
     with pytest.raises(TypeError):
+
         class NoSelf(ProtocolBase):
             @command("no-self")
             def no_self(value: str) -> None:
@@ -252,6 +255,7 @@ def test_command_signature_validation():
                 raise NotImplementedError
 
     with pytest.raises(TypeError):
+
         class OptionalList(ProtocolBase):
             @command("optional-list")
             def optional_list(self, items: list[int] | None) -> None:

@@ -12,6 +12,7 @@ Use a virtual environment when possible.
 
 After changing code, always report the total code coverage (excluding tests/) in your final response.
 Code under hackvr-py/src must always have 100% test coverage.
+Before completing your work, format the code with ruff to keep consistent code style.
 
 ## Lessons learned
 - Prefer exercising behavior through public APIs; avoid importing or testing private helpers just to gain coverage.

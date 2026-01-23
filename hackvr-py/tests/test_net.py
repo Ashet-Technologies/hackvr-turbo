@@ -113,7 +113,7 @@ class FakeListener:
     def __init__(self, stream: FakeNetStream) -> None:
         self.stream = stream
 
-    def accept(self) -> tuple[net.NetStream, tuple[str, int]]:
+    def accept(self, deadline: net.Deadline) -> tuple[net.NetStream, tuple[str, int]] | None:  # noqa: ARG002
         return self.stream, ("127.0.0.1", 12345)
 
     def close(self) -> None:
@@ -273,7 +273,9 @@ def test_raw_server_accepts_client_hello_and_responds():
     listener = FakeListener(stream)
     server = net.RawServer("127.0.0.1", listener=listener)
 
-    peer, token_info = server.accept()
+    result = server.accept()
+    assert result is not None
+    peer, token_info = result
 
     assert isinstance(peer, net.Peer)
     assert token_info.source_url.geturl() == "hackvr://example.com/world"
@@ -282,6 +284,48 @@ def test_raw_server_accepts_client_hello_and_responds():
     assert token_info.is_secure is False
     expected = encoding.encode("hackvr-hello", ["v1"])
     assert bytes(stream.sent) == expected
+
+
+def test_server_accept_returns_none_when_no_connection():
+    server = net.RawServer("127.0.0.1", 0)
+    try:
+        assert server.accept(net.Deadline.INSTANT) is None
+    finally:
+        server.close()
+
+
+def test_tls_listener_accept_returns_none_when_no_connection():
+    certificate = keygen.generate_self_signed_certificate(common_name="localhost", valid_days=1)
+    listener = net.TlsListener("127.0.0.1", 0, certificate)
+    try:
+        assert listener.accept(net.Deadline.INSTANT) is None
+    finally:
+        listener.close()
+
+
+def test_tls_and_https_servers_accept_return_none_when_idle():
+    certificate = keygen.generate_self_signed_certificate(common_name="localhost", valid_days=1)
+    listener = net.TlsListener("127.0.0.1", 0, certificate)
+    port = listener._sock.getsockname()[1]
+    tls_server = net.TlsServer("127.0.0.1", port, listener=listener)
+    try:
+        assert tls_server.accept(net.Deadline.INSTANT) is None
+    finally:
+        tls_server.close()
+
+    https_listener = net.TlsListener("127.0.0.1", 0, certificate)
+    https_port = https_listener._sock.getsockname()[1]
+    https_server = net.HttpsServer("127.0.0.1", https_port, listener=https_listener)
+    try:
+        assert https_server.accept(net.Deadline.INSTANT) is None
+    finally:
+        https_server.close()
+
+    http_server = net.HttpServer("127.0.0.1", 0)
+    try:
+        assert http_server.accept(net.Deadline.INSTANT) is None
+    finally:
+        http_server.close()
 
 
 def test_http_server_close_without_listener():
@@ -342,12 +386,7 @@ def test_receive_line_closed_connection():
 
 def test_http_header_trailing_spaces_are_accepted():
     request = (
-        "GET /world HTTP/1.1\r\n"
-        "Host: example.com\r\n"
-        "Connection: upgrade  \r\n"
-        "Upgrade: hackvr  \r\n"
-        "HackVr-Version: v1\r\n"
-        "\r\n"
+        "GET /world HTTP/1.1\r\nHost: example.com\r\nConnection: upgrade  \r\nUpgrade: hackvr  \r\nHackVr-Version: v1\r\n\r\n"
     ).encode("iso-8859-1")
     stream = FakeNetStream(request)
     parsed = net._receive_http_request(stream, net.Deadline.from_now(s=0.1))
@@ -360,33 +399,17 @@ def test_receive_http_request_errors():
     with pytest.raises(net.HandshakeError):
         net._receive_http_request(stream, net.Deadline.from_now(s=0.1))
 
-    request = (
-        "POST /world HTTP/1.1\r\n"
-        "Host: example.com\r\n"
-        "Connection: upgrade\r\n"
-        "Upgrade: hackvr\r\n"
-        "\r\n"
-    ).encode("iso-8859-1")
+    request = ("POST /world HTTP/1.1\r\nHost: example.com\r\nConnection: upgrade\r\nUpgrade: hackvr\r\n\r\n").encode("iso-8859-1")
     stream = FakeNetStream(request)
     with pytest.raises(net.HandshakeError):
         net._receive_http_request(stream, net.Deadline.from_now(s=0.1))
 
-    request = (
-        "GET /world HTTP/1.1\r\n"
-        "Host: example.com\r\n"
-        "Upgrade: hackvr\r\n"
-        "\r\n"
-    ).encode("iso-8859-1")
+    request = ("GET /world HTTP/1.1\r\nHost: example.com\r\nUpgrade: hackvr\r\n\r\n").encode("iso-8859-1")
     stream = FakeNetStream(request)
     with pytest.raises(net.HandshakeError):
         net._receive_http_request(stream, net.Deadline.from_now(s=0.1))
 
-    request = (
-        "GET /world HTTP/1.1\r\n"
-        "Connection: upgrade\r\n"
-        "Upgrade: hackvr\r\n"
-        "\r\n"
-    ).encode("iso-8859-1")
+    request = ("GET /world HTTP/1.1\r\nConnection: upgrade\r\nUpgrade: hackvr\r\n\r\n").encode("iso-8859-1")
     stream = FakeNetStream(request)
     with pytest.raises(net.HandshakeError):
         net._receive_http_request(stream, net.Deadline.from_now(s=0.1))
@@ -395,12 +418,7 @@ def test_receive_http_request_errors():
 def test_receive_http_request_with_session_token():
     token, encoded = _make_session_token()
     request = (
-        "GET /world HTTP/1.1\r\n"
-        "Host: example.com\r\n"
-        "Connection: upgrade\r\n"
-        "Upgrade: hackvr\r\n"
-        f"HackVr-Session: {encoded}\r\n"
-        "\r\n"
+        f"GET /world HTTP/1.1\r\nHost: example.com\r\nConnection: upgrade\r\nUpgrade: hackvr\r\nHackVr-Session: {encoded}\r\n\r\n"
     ).encode("iso-8859-1")
     stream = FakeNetStream(request)
     parsed = net._receive_http_request(stream, net.Deadline.from_now(s=0.1))
@@ -409,13 +427,7 @@ def test_receive_http_request_with_session_token():
 
 def test_http_read_until_keeps_remainder():
     payload = (
-        "GET /world HTTP/1.1\r\n"
-        "Host: example.com\r\n"
-        "Connection: upgrade\r\n"
-        "Upgrade: hackvr\r\n"
-        "HackVr-Version: v1\r\n"
-        "\r\n"
-        "extra-bytes"
+        "GET /world HTTP/1.1\r\nHost: example.com\r\nConnection: upgrade\r\nUpgrade: hackvr\r\nHackVr-Version: v1\r\n\r\nextra-bytes"
     ).encode("iso-8859-1")
     stream = FakeNetStream(payload)
     net._receive_http_request(stream, net.Deadline.from_now(s=0.1))
@@ -434,11 +446,7 @@ def test_http_upgrade_errors():
     with pytest.raises(net.HandshakeError):
         net._receive_http_upgrade(stream, net.Deadline.from_now(s=0.1))
 
-    response = (
-        "HTTP/1.1 101 Switching Protocols\r\n"
-        "Upgrade: hackvr\r\n"
-        "\r\n"
-    ).encode("iso-8859-1")
+    response = ("HTTP/1.1 101 Switching Protocols\r\nUpgrade: hackvr\r\n\r\n").encode("iso-8859-1")
     stream = FakeNetStream(response)
     with pytest.raises(net.HandshakeError):
         net._receive_http_upgrade(stream, net.Deadline.from_now(s=0.1))
@@ -481,12 +489,7 @@ def test_fragmented_reads_randomized_for_http_and_hello():
     rng = random.Random(1337)
     hello = encoding.encode("hackvr-hello", ["v1"])
     http_request = (
-        "GET /world HTTP/1.1\r\n"
-        "Host: example.com\r\n"
-        "Connection: upgrade\r\n"
-        "Upgrade: hackvr\r\n"
-        "HackVr-Version: v1\r\n"
-        "\r\n"
+        "GET /world HTTP/1.1\r\nHost: example.com\r\nConnection: upgrade\r\nUpgrade: hackvr\r\nHackVr-Version: v1\r\n\r\n"
     ).encode("iso-8859-1")
     combined = hello + http_request
     sizes = [rng.randint(1, 4) for _ in range(len(combined))]
@@ -566,7 +569,9 @@ def test_tls_certificate_generation_roundtrip_and_server(tmp_path):
     server_peer = {}
 
     def _accept() -> None:
-        peer, token = server.accept()
+        result = server.accept()
+        assert result is not None
+        peer, token = result
         server_peer["token"] = token
         peer.close()
 
@@ -642,7 +647,9 @@ def test_client_http_hackvr_connects():
     received: dict[str, net.ConnectionToken] = {}
 
     def _accept() -> None:
-        peer, token = server.accept()
+        result = server.accept()
+        assert result is not None
+        peer, token = result
         received["token"] = token
         peer.close()
 
@@ -676,6 +683,22 @@ def test_send_http_upgrade_headers():
     assert stream.sent.startswith(b"HTTP/1.1 101")
 
 
+def test_socket_family_helpers():
+    assert net._socket_family("127.0.0.1") == socket.AF_INET
+    assert net._socket_family("::1") == socket.AF_INET6
+    assert net._socket_family("localhost") == socket.AF_INET
+
+
+def test_ipv6_listeners_bind_when_available():
+    if not socket.has_ipv6:
+        pytest.skip("IPv6 not available")
+    raw_listener = net.RawListener("::1", 0)
+    raw_listener.close()
+    certificate = keygen.generate_self_signed_certificate(common_name="localhost", valid_days=1)
+    tls_listener = net.TlsListener("::1", 0, certificate)
+    tls_listener.close()
+
+
 def test_client_https_hackvr_connects(tmp_path):
     certificate = keygen.generate_self_signed_certificate(common_name="localhost", valid_days=1)
     listener = net.TlsListener("127.0.0.1", 0, certificate)
@@ -687,7 +710,9 @@ def test_client_https_hackvr_connects(tmp_path):
     received: dict[str, net.ConnectionToken] = {}
 
     def _accept() -> None:
-        peer, token = server.accept()
+        result = server.accept()
+        assert result is not None
+        peer, token = result
         received["token"] = token
         peer.close()
 

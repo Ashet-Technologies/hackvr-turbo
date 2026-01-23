@@ -1,5 +1,6 @@
 import random
 
+from hackvr.common import encoding
 from hackvr.common.stream import MAX_LINE_LENGTH, Parser
 
 
@@ -107,3 +108,27 @@ def test_parser_fuzz_inputs():
         parser.push(data)
         while parser.pull() is not None:
             pass
+
+
+def test_parser_handles_large_valid_block():
+    parser = Parser()
+    rng = random.Random(4242)
+    expected: list[list[str]] = []
+    buffer = bytearray()
+    while len(buffer) < 10240:
+        cmd = f"cmd{rng.randint(0, 9)}"
+        param_count = rng.randint(0, 5)
+        params = [f"p{param_index}-{cmd}" for param_index in range(param_count)]
+        buffer.extend(encoding.encode(cmd, params))
+        expected.append([cmd, *params])
+
+    parser.push(bytes(buffer))
+
+    received = []
+    while True:
+        parts = parser.pull()
+        if parts is None:
+            break
+        received.append(parts)
+
+    assert received == expected
