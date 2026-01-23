@@ -4,6 +4,7 @@ import socket
 import threading
 import time
 from pathlib import Path
+from typing import cast
 from urllib.parse import urlsplit
 
 import pytest
@@ -11,7 +12,7 @@ from OpenSSL import SSL
 
 from hackvr import net
 from hackvr.base import ConnectionToken
-from hackvr.common import encoding
+from hackvr.common import encoding, types
 from hackvr.tools import keygen, playback_server
 
 
@@ -44,6 +45,35 @@ class FakeServer:
 
     def close(self) -> None:
         self.closed = True
+
+
+class SequenceStream(net.NetStream):
+    def __init__(self, chunks: list[bytes | None]) -> None:
+        super().__init__()
+        self._chunks = list(chunks)
+        self.sent: list[bytes] = []
+
+    def recv_unbuffered(self, max_bytes: int, deadline: net.Deadline) -> bytes | None:  # noqa: ARG002
+        if not self._chunks:
+            return None
+        return self._chunks.pop(0)
+
+    def send(self, data: bytes) -> None:
+        self.sent.append(data)
+
+    def close(self) -> None:
+        return None
+
+
+class ErrorStream(net.NetStream):
+    def recv_unbuffered(self, max_bytes: int, deadline: net.Deadline) -> bytes | None:  # noqa: ARG002
+        raise ValueError("bad stream")
+
+    def send(self, data: bytes) -> None:  # noqa: ARG002
+        return None
+
+    def close(self) -> None:
+        return None
 
 
 class InsecureConnector(net.DefaultConnector):
@@ -105,6 +135,24 @@ def test_load_commands_negative_delay(tmp_path: Path) -> None:
         playback_server._load_commands(path)
 
 
+def test_load_commands_invalid_payloads(tmp_path: Path) -> None:
+    path = _write_json(tmp_path, {})
+    with pytest.raises(TypeError, match="Playback file must be a JSON array"):
+        playback_server._load_commands(path)
+
+    path = _write_json(tmp_path, ["nope"])
+    with pytest.raises(TypeError, match="Entry 0 must be an object"):
+        playback_server._load_commands(path)
+
+    path = _write_json(tmp_path, [{"cmd": "nope"}])
+    with pytest.raises(TypeError, match="Entry 0 cmd must be a string array"):
+        playback_server._load_commands(path)
+
+    path = _write_json(tmp_path, [{"cmd": ["ok"], "delay": "soon"}])
+    with pytest.raises(TypeError, match="Entry 0 delay must be a number"):
+        playback_server._load_commands(path)
+
+
 def test_dispatcher_logs_error() -> None:
     logs: list[str] = []
 
@@ -116,6 +164,20 @@ def test_dispatcher_logs_error() -> None:
     dispatcher.handle_error("chat", "bad input", ["oops"])
 
     assert logs == ["invalid chat ['oops'] (bad input)"]
+
+
+def test_dispatcher_noop_commands() -> None:
+    dispatcher = playback_server._PlaybackDispatcher(log_error=lambda _message: None)
+    dispatcher.chat("hello")
+    dispatcher.set_user(types.UserID("user-1"))
+    dispatcher.authenticate(types.UserID("user-1"), types.Bytes64(b"x" * 64))
+    dispatcher.resume_session(types.SessionToken(b"a" * 32))
+    dispatcher.send_input(cast(types.ZString, "hi"))
+    dispatcher.tap_object(types.ObjectID("obj-1"), types.TapKind.PRIMARY, types.Tag("tag-1"))
+    dispatcher.tell_object(types.ObjectID("obj-1"), cast(types.ZString, "hi"))
+    dispatcher.intent(types.IntentID("intent-1"), types.Vec3(0.0, 0.0, 1.0))
+    dispatcher.raycast(types.Vec3(0.0, 0.0, 0.0), types.Vec3(0.0, 1.0, 0.0))
+    dispatcher.raycast_cancel()
 
 
 def test_send_commands_writes_encoded(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -150,6 +212,121 @@ def test_send_commands_writes_encoded(monkeypatch: pytest.MonkeyPatch) -> None:
     ]
 
 
+def test_send_commands_logs_invalid_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    stream = FakeStream()
+    commands = [
+        playback_server.PlaybackCommand(cmd=[], delay=0.0),
+        playback_server.PlaybackCommand(cmd=["chat", "hello"], delay=1.0),
+    ]
+    output = io.StringIO()
+    monkeypatch.setattr(playback_server.time, "sleep", lambda _delay: None)
+    monkeypatch.setattr(playback_server.time, "monotonic_ns", lambda: 0)
+    connection = playback_server._PlaybackConnection(
+        stream,
+        ConnectionToken(
+            source_url=urlsplit("hackvr://example.com/world"),
+            session_token=None,
+            protocol="hackvr",
+            is_secure=False,
+        ),
+        commands,
+        output,
+        name="client-1",
+    )
+
+    connection._send_commands()
+
+    assert stream.sent == [encoding.encode("chat", ["hello"])]
+    assert "send <invalid>" in output.getvalue()
+
+
+def test_send_commands_breaks_when_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    stream = FakeStream()
+    commands = [playback_server.PlaybackCommand(cmd=["chat", "hello"], delay=0.0)]
+    output = io.StringIO()
+    monkeypatch.setattr(playback_server.time, "monotonic_ns", lambda: 0)
+    connection = playback_server._PlaybackConnection(
+        stream,
+        ConnectionToken(
+            source_url=urlsplit("hackvr://example.com/world"),
+            session_token=None,
+            protocol="hackvr",
+            is_secure=False,
+        ),
+        commands,
+        output,
+        name="client-1",
+    )
+    connection._closed.set()
+
+    connection._send_commands()
+
+    assert stream.sent == []
+
+
+def test_read_loop_handles_valid_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = encoding.encode("chat", ["hello"])
+    stream = SequenceStream([payload, None, b""])
+    output = io.StringIO()
+    monkeypatch.setattr(playback_server.time, "monotonic_ns", lambda: 0)
+    connection = playback_server._PlaybackConnection(
+        stream,
+        ConnectionToken(
+            source_url=urlsplit("hackvr://example.com/world"),
+            session_token=None,
+            protocol="hackvr",
+            is_secure=False,
+        ),
+        [],
+        output,
+        name="client-1",
+    )
+
+    connection._read_loop()
+
+    log_output = output.getvalue()
+    assert "recv chat hello" in log_output
+
+
+def test_read_loop_handles_stream_error() -> None:
+    output = io.StringIO()
+    connection = playback_server._PlaybackConnection(
+        ErrorStream(),
+        ConnectionToken(
+            source_url=urlsplit("hackvr://example.com/world"),
+            session_token=None,
+            protocol="hackvr",
+            is_secure=False,
+        ),
+        [],
+        output,
+        name="client-1",
+    )
+
+    connection._read_loop()
+
+
+def test_log_error_writes_details(monkeypatch: pytest.MonkeyPatch) -> None:
+    output = io.StringIO()
+    monkeypatch.setattr(playback_server.time, "monotonic_ns", lambda: 0)
+    connection = playback_server._PlaybackConnection(
+        FakeStream(),
+        ConnectionToken(
+            source_url=urlsplit("hackvr://example.com/world"),
+            session_token=None,
+            protocol="hackvr",
+            is_secure=False,
+        ),
+        [],
+        output,
+        name="client-1",
+    )
+
+    connection._log_error("invalid chat [] (bad input)")
+
+    assert "recv invalid chat [] (bad input)" in output.getvalue()
+
+
 def test_oneshot_server_stops_after_disconnect(monkeypatch: pytest.MonkeyPatch) -> None:
     stream = FakeStream()
     token = ConnectionToken(
@@ -178,6 +355,47 @@ def test_oneshot_server_stops_after_disconnect(monkeypatch: pytest.MonkeyPatch) 
     assert fake_server.accept_calls == 1
     assert fake_server.closed is True
     assert stream.closed is True
+
+
+def test_serve_forever_accepts_single_client() -> None:
+    stream = FakeStream()
+    token = ConnectionToken(
+        source_url=urlsplit("hackvr://example.com/world"),
+        session_token=None,
+        protocol="hackvr",
+        is_secure=False,
+    )
+
+    class LoopServer(FakeServer):
+        def _accept_stream(self) -> tuple[net.NetStream, ConnectionToken]:
+            if self.accept_calls >= 1:
+                raise StopIteration
+            return super()._accept_stream()
+
+    fake_server = LoopServer(stream, token)
+    server = playback_server.PlaybackServer(
+        host="127.0.0.1",
+        port=1234,
+        scheme="hackvr",
+        commands=[],
+        output=io.StringIO(),
+    )
+    server._server = fake_server
+
+    with pytest.raises(StopIteration):
+        server.serve_forever()
+
+    assert fake_server.accept_calls == 1
+
+
+def test_create_server_rejects_scheme() -> None:
+    with pytest.raises(ValueError, match="Unsupported scheme"):
+        playback_server._create_server("127.0.0.1", 0, "nope")
+
+
+def test_build_tls_listener_requires_cert() -> None:
+    with pytest.raises(ValueError, match="TLS schemes require"):
+        playback_server._build_tls_listener("127.0.0.1", 0, tls_cert=None)
 
 
 def test_main_runs_oneshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -234,3 +452,20 @@ def test_main_runs_oneshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
         thread.join(timeout=5.0)
         assert not thread.is_alive()
         assert not errors
+
+
+def test_main_requires_both_tls_files(tmp_path: Path) -> None:
+    json_path = _write_json(tmp_path, [])
+    cert_path = tmp_path / "cert.pem"
+    cert_path.write_text("cert", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="must be provided together"):
+        playback_server.main(
+            [
+                str(json_path),
+                "--scheme",
+                "hackvrs",
+                "--tls-cert",
+                str(cert_path),
+            ]
+        )
