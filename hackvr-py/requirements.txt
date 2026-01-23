@@ -2,6 +2,8 @@ build
 ruff
 ty
 pytest
+hypothesis
+atheris
 pyopenssl
 cryptography
 requests
