@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, TextIO
 
+from OpenSSL import SSL
+
 from hackvr import net
 from hackvr.common import encoding, stream, types
 from hackvr.server import Server as ProtocolServer
@@ -116,7 +118,11 @@ class _PlaybackConnection:
     def _read_loop(self) -> None:
         parser = stream.Parser()
         while not self._closed.is_set():
-            data = self._stream.recv(4096, deadline=net.Deadline.from_now(ms=50))
+            try:
+                data = self._stream.recv(4096, deadline=net.Deadline.from_now(ms=50))
+            except (OSError, SSL.Error, ValueError):
+                self._closed.set()
+                return
             if data is None:
                 continue
             if data == b"":
@@ -171,6 +177,7 @@ class PlaybackServer:
         scheme: str,
         commands: list[PlaybackCommand],
         output: TextIO,
+        oneshot: bool = False,
         tls_cert: net.TlsServerCertificate | None = None,
     ) -> None:
         self._host = host
@@ -178,12 +185,19 @@ class PlaybackServer:
         self._scheme = scheme
         self._commands = commands
         self._output = output
+        self._oneshot = oneshot
         self._server = _create_server(host, port, scheme, tls_cert=tls_cert)
 
     def serve_forever(self) -> None:
-        index = 0
         self._output.write(f"Listening on {self._scheme}://{self._host}:{self._port}\n")
         self._output.flush()
+        if self._oneshot:
+            stream, token = self._server._accept_stream()
+            handler = _PlaybackConnection(stream, token, self._commands, self._output, name="client-1")
+            handler.run()
+            self._server.close()
+            return
+        index = 0
         while True:
             stream, token = self._server._accept_stream()
             index += 1
@@ -277,6 +291,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         help="Path to TLS private key (required for hackvrs/https+hackvr)",
     )
+    parser.add_argument(
+        "--oneshot",
+        action="store_true",
+        help="Stop the server after the first client disconnects",
+    )
     return parser.parse_args(argv)
 
 
@@ -295,11 +314,12 @@ def main(argv: list[str] | None = None) -> int:
         scheme=args.scheme,
         commands=commands,
         output=sys.stdout,
+        oneshot=args.oneshot,
         tls_cert=tls_cert,
     )
     server.serve_forever()
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
