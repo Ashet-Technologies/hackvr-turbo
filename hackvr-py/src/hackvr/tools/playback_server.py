@@ -15,7 +15,7 @@ from OpenSSL import SSL
 
 from hackvr import net
 from hackvr.common import encoding, stream, types
-from hackvr.server import Server as ProtocolServer
+from hackvr.server import AbstractServer as ProtocolServer
 
 if TYPE_CHECKING:
     from collections.abc import Callable

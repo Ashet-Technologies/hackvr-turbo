@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from .common import types
 
 
-class Client(ProtocolBase):
+class AbstractClient(ProtocolBase):
     """Client-side protocol handlers for server-to-client commands."""
 
     @command("chat")

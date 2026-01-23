@@ -1,7 +1,8 @@
 validate: lint test
 
 test:
-    pytest --cov=hackvr --cov-report=term-missing
+    pytest --cov=hackvr 
+    coverage xml
 
 lint: lint-codestyle lint-types
 

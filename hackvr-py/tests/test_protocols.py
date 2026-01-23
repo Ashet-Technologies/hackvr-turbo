@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from hackvr import Client, Server
+from hackvr import AbstractClient as Client, AbstractServer as Server
 from hackvr.common import types
 
 SERVER_COMMANDS = {
@@ -63,6 +63,7 @@ def _make_collector(base_cls):
     methods["handle_error"] = handle_error
 
     for cmd, spec in base_cls._command_specs.items():
+
         def _factory(command_name):
             def _handler(self, *args):
                 self.calls.append((command_name, args))
@@ -146,6 +147,7 @@ def _make_raiser(base_cls):
     methods["handle_error"] = handle_error
 
     for spec in base_cls._command_specs.values():
+
         def _factory(method_name):
             def _handler(self, *args):
                 return getattr(base_cls, method_name)(self, *args)

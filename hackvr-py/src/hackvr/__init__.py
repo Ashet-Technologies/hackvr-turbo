@@ -1,15 +1,15 @@
 """HackVR helpers."""
 
 from .base import ProtocolBase, RemoteBase, command
-from .client import Client, RemoteServer
-from .server import RemoteClient, Server
+from .client import AbstractClient, RemoteServer
+from .server import RemoteClient, AbstractServer
 
 __all__ = [
-    "Client",
+    "AbstractClient",
+    "AbstractServer",
     "ProtocolBase",
     "RemoteBase",
     "RemoteClient",
     "RemoteServer",
-    "Server",
     "command",
 ]
